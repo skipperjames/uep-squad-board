@@ -36,7 +36,7 @@
     me: 'me',                              // 我是谁：me | a | b
     channel: {
       type: 'github',                      // github | local
-      repo: 'skipperjames/uep-squad-board',// 团队数据仓库（与 niko-dev 区分）
+      repo: 'skipperjames/niko-team-data', // 团队数据仓库（**私有**；代码仓是 uep-squad-board，两者区分）
       file: 'board.json',
       branch: 'main',
       token: null                          // 共用写入 token（空=公开只读）
@@ -58,8 +58,8 @@
   };
   const ROLE = {
     me: { n: '我',   c: '#667eea', r: '制作人/策划' },
-    a:  { n: '阿泽', c: '#34d399', r: '程序' },
-    b:  { n: '小满', c: '#f59e0b', r: '美术TA' }
+    a:  { n: '月饼', c: '#34d399', r: '程序' },
+    b:  { n: '邢锦', c: '#f59e0b', r: '美术TA' }
   };
   const SYNC_PREFIX = 'niko_team_';
 
@@ -417,8 +417,11 @@
   .cft .miniBtn{cursor:pointer;padding:1px 5px;border-radius:4px;border:1px solid var(--card-border)}
   .cft .miniBtn:hover{border-color:var(--accent);color:var(--accent)}
   .due{margin-left:auto;font-weight:700}
-  .drawer{position:absolute;top:0;right:0;bottom:0;width:400px;max-width:92%;background:var(--card-bg);border-left:1px solid var(--card-border);z-index:5;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;box-shadow:-4px 0 20px rgba(0,0,0,.16)}
-  .drawer.show{transform:translateX(0)}
+  /* 2026-10-13 由「右侧抽屉」改「居中弹窗」（用户要求：编辑窗口放中间）+ 遮罩 + 备注框放大 */
+  .dscrim{position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:4;opacity:0;pointer-events:none;transition:opacity .22s}
+  .dscrim.show{opacity:1;pointer-events:auto}
+  .drawer{position:absolute;left:50%;top:50%;width:min(640px,94%);max-height:88%;background:var(--card-bg);border:1px solid var(--card-border);border-radius:14px;z-index:5;transform:translate(-50%,-50%) scale(.97);opacity:0;pointer-events:none;transition:transform .22s ease,opacity .22s ease;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.34)}
+  .drawer.show{transform:translate(-50%,-50%) scale(1);opacity:1;pointer-events:auto}
   .dhd{padding:12px 16px;border-bottom:1px solid var(--card-border);display:flex;align-items:center;gap:9px;font-weight:700}
   .dbd{padding:14px 16px;overflow-y:auto;flex:1}
   .dft{padding:11px 16px;border-top:1px solid var(--card-border);display:flex;gap:8px}
@@ -430,6 +433,7 @@
   input:focus,select:focus,textarea:focus{border-color:var(--accent)}
   input[type=range]{width:100%;accent-color:var(--accent)}
   textarea{resize:vertical;min-height:56px}
+  textarea.noteArea{min-height:168px;line-height:1.7}
   .btn{padding:4px 12px;border-radius:6px;border:1px solid var(--card-border);background:var(--card-bg);cursor:pointer;font-size:11.5px;color:var(--text);font-family:inherit;white-space:nowrap}
   .btn:hover{border-color:var(--accent)}
   .btn.pri{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-color:transparent;font-weight:600}
@@ -514,6 +518,7 @@
       <style>${CSS}</style>
       <div class="t-root" data-th="${curTheme()}">
         <div class="surface"></div>
+        <div class="dscrim" id="dScrim"></div>
         <div class="drawer" id="drawer">
           <div class="dhd"><span id="dTitle">卡片</span><span class="closeX" id="dClose">×</span></div>
           <div class="dbd" id="dBody"></div>
@@ -541,6 +546,7 @@
       </div>`;
     // 持久层事件只绑一次
     root.querySelector('#dClose').onclick = closeDrawer;
+    root.querySelector('#dScrim').onclick = closeDrawer;   // 点遮罩也关
     root.querySelector('#gmClose').onclick = () => closeModal('genericModal');
     root.querySelector('#cfClose').onclick = () => closeModal('conflictModal');
     root.addEventListener('click', onRootClick);
@@ -809,16 +815,16 @@
       </div>
       <div class="field"><div class="flabel">进度 <b id="progVal">${a.prog}%</b></div>
         <input type="range" id="fProg" min="0" max="100" value="${a.prog}"></div>
-      <div class="field"><div class="flabel">备注</div><textarea id="fNote">${esc(a.note)}</textarea></div>
+      <div class="field"><div class="flabel">备注</div><textarea id="fNote" class="noteArea">${esc(a.note)}</textarea></div>
       <div class="flabel" style="margin-top:4px">💬 讨论（${dcount}）· 讨论留在卡上，三个月后还能查到</div>
       <div class="disc" id="discList">
         ${(DISCUSS[a.id] || []).map(d => `<div class="disc-i">${av(d.u, 22)}
           <div class="disc-b"><div class="disc-h"><b>${roleOf(d.u).n}</b><span class="tm">${fmtT(d.t)}</span></div>
-          <div class="disc-t">${esc(d.x).replace(/@(我|阿泽|小满)/g, '<span class="at">@$1</span>')}</div></div></div>`).join('')
+          <div class="disc-t">${esc(d.x).replace(/@(我|月饼|邢锦)/g, '<span class="at">@$1</span>')}</div></div></div>`).join('')
         || '<div class="tiny mut">还没有讨论 · 第一个说点什么</div>'}
       </div>
       <div class="row" style="gap:6px;margin-top:8px">
-        <input type="text" id="discInput" placeholder="回复…（支持 @我 @阿泽 @小满）" style="flex:1">
+        <input type="text" id="discInput" placeholder="回复…（支持 @我 @月饼 @邢锦）" style="flex:1">
         <button class="btn pri" id="discSend">发送</button>
       </div>`;
     root.querySelector('#dFoot').innerHTML = `
@@ -829,22 +835,27 @@
     root.querySelector('#fProg').oninput = e => { const p = root.querySelector('#progVal'); if (p) p.textContent = e.target.value + '%'; };
     root.querySelector('#saveCard').onclick = () => saveCard(a);
     root.querySelector('#draftCard').onclick = () => saveDraft(a);
-    root.querySelector('#delCard').onclick = () => { deleteCard(a.id); closeDrawer(); };
+    root.querySelector('#delCard').onclick = () => { deleteCard(a.id, true); };   // 确认后才关抽屉
     const ud = root.querySelector('#useDraft'); if (ud) ud.onclick = () => { a.draft = null; save(); openDrawer(a.id); toast('草稿已还原到编辑框'); };
     const dd = root.querySelector('#dropDraft'); if (dd) dd.onclick = () => { snapshot(); a.draft = null; save(); render(); closeDrawer(); toast('草稿已丢弃'); };
     root.querySelector('#discSend').onclick = () => sendDisc(a.id);
     root.querySelector('#discInput').onkeydown = e => { if (e.key === 'Enter') sendDisc(a.id); };
     root.querySelector('#drawer').classList.add('show');
+    root.querySelector('#dScrim').classList.add('show');
     if (focusDisc) setTimeout(() => { const i = root.querySelector('#discInput'); if (i) i.focus(); }, 260);
   }
-  function closeDrawer() { const d = root.querySelector('#drawer'); if (d) d.classList.remove('show'); curCard = null; }
+  function closeDrawer() {
+    const d = root.querySelector('#drawer'); if (d) d.classList.remove('show');
+    const s = root.querySelector('#dScrim'); if (s) s.classList.remove('show');
+    curCard = null;
+  }
   function sendDisc(id) {
     const inp = root.querySelector('#discInput'); if (!inp) return;
     const v = inp.value.trim(); if (!v) return;
     snapshot();
     (DISCUSS[id] = DISCUSS[id] || []).push({ u: CONFIG.me, t: now(), x: v });
     log('discuss', id, `讨论：${v.slice(0, 20)}`);
-    const m = v.match(/@(我|阿泽|小满)/g);
+    const m = v.match(/@(我|月饼|邢锦)/g);
     if (m) toast(`📨 已在讨论里 @ ${m.join('、')}，对方会收到提醒`);   // 27 @我提醒
     save(); render(); openDrawer(id, true);
   }
@@ -883,14 +894,26 @@
   }
 
   /* ---------- 删除 / 回收站（47） ---------- */
-  function deleteCard(id) {
+  function deleteCard(id, closeAfter) {
     const i = DATA.findIndex(x => x.id === id); if (i < 0) return;
     const a = DATA[i];
-    if (!confirm(`删除「${a.name}」？会移入回收站，30 天内可还原。`)) return;
+    askConfirm({
+      title: '🗑️ 删除卡片',
+      html: `删除「<b>${esc(a.name)}</b>」？<br><span class="tiny mut">会移入回收站，30 天内可还原。</span>`,
+      ok: '删除', danger: true,
+      then: yes => {
+        if (!yes) return;
+        const j = DATA.findIndex(x => x.id === id); if (j < 0) return;
+        if (closeAfter) closeDrawer();
+        doDeleteCard(j, DATA[j]);
+      }
+    });
+  }
+  function doDeleteCard(i, a) {
     snapshot();
     TRASH.unshift({ ...a, deletedAt: now(), deletedBy: CONFIG.me });
     DATA.splice(i, 1);
-    log('delete', id, `删除「${a.name}」`);
+    log('delete', a.id, `删除「${a.name}」`);
     save(); render();
     toast(`已移入回收站：${a.name}`, '', () => restoreFromTrash(a.id));
   }
@@ -1090,13 +1113,22 @@
   }
   function batchDelete() {
     if (!SEL.size) return;
-    if (!confirm(`确定删除选中的 ${SEL.size} 张卡？会移入回收站。`)) return;
+    const n = SEL.size;
+    askConfirm({
+      title: '🗑️ 批量删除',
+      html: `确定删除选中的 <b>${n}</b> 张卡？<br><span class="tiny mut">会移入回收站，可还原。</span>`,
+      ok: '删除', danger: true,
+      then: yes => { if (!yes) return; doBatchDelete(); }
+    });
+  }
+  function doBatchDelete() {
+    const n = SEL.size;
     snapshot();
     [...SEL].forEach(id => {
       const i = DATA.findIndex(x => x.id === id);
       if (i >= 0) { TRASH.unshift({ ...DATA[i], deletedAt: now(), deletedBy: CONFIG.me }); DATA.splice(i, 1); }
     });
-    log('delete', null, `批量删除 ${SEL.size} 张`);
+    log('delete', null, `批量删除 ${n} 张`);
     SEL.clear(); save(); render();
     toast('已批量删除，可在回收站还原', '', () => undo());
   }
@@ -1112,6 +1144,21 @@
   }
   function openModal(cls) { const m = root.querySelector('.' + cls); if (m) m.classList.add('show'); }
   function closeModal(cls) { const m = root.querySelector('.' + cls); if (m) m.classList.remove('show'); }
+  /* 页面内确认框（2026-10-13 替代原生 confirm —— 原生弹窗又丑、手机端还容易被拦）
+     ⚠️ 原生 confirm 是同步的，这里换成异步 ⇒ 调用方必须把「确认后要做的事」写成 then 回调 */
+  function askConfirm(opt) {
+    if (!root) return;
+    root.querySelector('#gmTitle').innerHTML = opt.title || '确认';
+    root.querySelector('#gmBody').innerHTML =
+      `<div style="font-size:13.5px;line-height:1.75">${opt.html || esc(opt.msg || '')}</div>`;
+    root.querySelector('#gmFoot').innerHTML =
+      `<button class="btn" id="gmCancel">${esc(opt.cancel || '取消')}</button>` +
+      `<button class="btn ${opt.danger ? 'danger' : 'pri'}" id="gmOk">${esc(opt.ok || '确定')}</button>`;
+    const done = v => { closeModal('genericModal'); if (typeof opt.then === 'function') opt.then(v); };
+    root.querySelector('#gmCancel').onclick = () => done(false);
+    root.querySelector('#gmOk').onclick = () => done(true);
+    openModal('genericModal');
+  }
 
   /* ---------- 键盘（35 撤销重做） ---------- */
   function onKeydown(e) {
