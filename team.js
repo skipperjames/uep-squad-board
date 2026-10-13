@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.0.0-20261012';
+  const VERSION = 'v2.1.0-20261013';   // 2026-10-13：改名(月饼/邢锦) · 数据仓切私有 · UI 三改(删除确认/面板居中/备注框) · 自动同步
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -262,10 +262,10 @@
   /* 每次本地变更都调它：落盘 + 节流上云 */
   function save() { saveLocal(); scheduleSync(); }
 
-  async function pull() {
+  async function pull(silent) {
     const ch = CONFIG.channel;
-    if (ch.type === 'local') { setDot('warn', '本地模式 · 未接云端'); return; }
-    setDot('busy', '拉取中…');
+    if (ch.type === 'local') { if (!silent) setDot('warn', '本地模式 · 未接云端'); return; }
+    if (!silent) setDot('busy', '拉取中…');
     try {
       const cur = await ghGet();
       if (!cur.data) {
@@ -282,7 +282,7 @@
       setDot('ok', '已同步 · ' + fmtT(now()));
       emit('pull', { count: DATA.length });
     } catch (e) {
-      setDot('err', '拉取失败');
+      if (!silent) setDot('err', '拉取失败');   // 自动轮询失败不动状态灯（网络抖动很常见），下一轮会重试
       emit('pull-error', { error: String(e) });
     }
   }
@@ -849,6 +849,41 @@
     const s = root.querySelector('#dScrim'); if (s) s.classList.remove('show');
     curCard = null;
   }
+
+  /* ============================================================
+     自动同步（2026-10-13 新增）
+     ------------------------------------------------------------
+     之前只在 mount 时 pull 一次 ⇒ 同事改了卡片，你这边**必须手点「🔄 刷新」**才看得到。
+     现在补三层，尽量静默、不打扰、不烧 API 配额：
+       ① 每 20 秒轮询一次（页面可见 + 抽屉没开 + 没在同步中 + 距上次>5s）
+       ② 切回这个标签页（visibilitychange → visible）立刻拉
+       ③ 窗口重新获焦（focus）立刻拉
+     ⚠️ 抽屉打开时不拉：编辑中的 curCard 指向旧对象，pull 后 applyState 会换掉 DATA，
+        这时保存会把改动写回悬空对象 ⇒ 直接丢数据。
+     ⚠️ 轮询用静默模式（pull(true)）：不闪「拉取中…」、失败也不动状态灯。
+     配额：20s 一次 ≈ 180 次/小时/标签页，fine-grained token 上限 5000/小时，够用。 */
+  let autoTimer = null, lastAuto = 0;
+  function autoPull() {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    if (curCard) return;                              // 正在编辑，别打扰
+    if (syncing) return;                              // 已有同步在跑
+    if (!CONFIG.channel || CONFIG.channel.type === 'local') return;
+    const t = Date.now();
+    if (t - lastAuto < 5000) return;                  // 防重入（轮询 + focus 可能撞一起）
+    lastAuto = t;
+    pull(true);
+  }
+  function startAutoSync() {
+    stopAutoSync();
+    autoTimer = setInterval(autoPull, 20000);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') autoPull();
+      });
+    }
+    if (typeof window !== 'undefined') window.addEventListener('focus', autoPull);
+  }
+  function stopAutoSync() { if (autoTimer) { clearInterval(autoTimer); autoTimer = null; } }
   function sendDisc(id) {
     const inp = root.querySelector('#discInput'); if (!inp) return;
     const v = inp.value.trim(); if (!v) return;
@@ -1223,11 +1258,13 @@
       buildChrome();
       render();
       pull();
+      startAutoSync();
       emit('mount', { count: DATA.length, view: VIEW });
       return api;
     },
     destroy() {
       if (pollTimer) clearInterval(pollTimer);
+      stopAutoSync();
       if (hostEl && hostEl.shadowRoot) hostEl.shadowRoot.innerHTML = '';
       mounted = false;
       document.removeEventListener('keydown', onKeydown);
