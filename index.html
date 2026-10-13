@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>UE 团队看板 · 数据仓库</title>
+<title>UE 团队看板 · 组件仓</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
@@ -29,50 +29,51 @@ a{color:#818cf8}
 </head>
 <body>
 <div class="wrap">
-  <h1>🎮 UE 团队看板 · 数据仓库</h1>
-  <div class="sub">skipperjames / uep-squad-board · 三人小队（我 / 阿泽 / 小满）</div>
+  <h1>🎮 UE 团队看板 · 组件仓</h1>
+  <div class="sub">三人小队（我 / 月饼 / 邢锦）· 组件公开，数据私有</div>
 
   <div class="card">
     <h2>这是什么？</h2>
-    <p>这个仓库有两个用途：<br>
-      ① <b>放 team.js</b>（看板植入组件，通过 GitHub Pages 对外提供）<br>
-      ② <b>放 board.json</b>（团队看板的数据，三人读写同一份）<br>
-      <span class="warn">注意：数据同步，不是文件同步。</span>HTML 只部署一次，数据放这里。</p>
+    <p>本仓库<b>只放组件</b>：<code>team.js</code>（看板植入组件，通过 GitHub Pages 对外提供）。
+      <b>团队数据不在这个仓</b> —— 在<b>私有仓</b> <code>skipperjames/niko-team-data</code> 的 <code>board.json</code>，
+      靠 token 读写。<br>
+      <span class="warn">数据不分家会出事：</span>公开仓谁都能看，团队数据必须落私有仓。</p>
     <div style="margin-top:10px">
       <span class="pill">team.js 植入组件</span>
-      <span class="pill">board.json 团队数据</span>
+      <span class="pill">数据仓 niko-team-data（私有）</span>
       <span class="pill">18 个协作功能</span>
     </div>
   </div>
 
   <div class="card">
     <h2>植入到你的工作站（两行）</h2>
-    <pre><code>&lt;div id="niko-team" data-me="a"&gt;&lt;/div&gt;
+    <pre><code>&lt;div id="niko-team" data-me="a" data-repo="skipperjames/niko-team-data"&gt;&lt;/div&gt;
 &lt;script src="https://skipperjames.github.io/uep-squad-board/team.js"&gt;&lt;/script&gt;</code></pre>
-    <p><code>data-me</code> 填你自己：<code>me</code>=我 · <code>a</code>=阿泽 · <code>b</code>=小满。
+    <p><code>data-me</code> 填你自己：<code>me</code>=我 · <code>a</code>=月饼 · <code>b</code>=邢锦。<br>
+    <code>data-token</code> 填数据仓那把 token（或页面里点 ⚙️ 粘一次，只存在本机，不上云）。<br>
     样式隔离（Shadow DOM），不会影响你页面一分一毫。</p>
   </div>
 
   <div class="card">
-    <h2>首次设置（管理员做一次）</h2>
+    <h2>现状（2026-10-13 已配好）</h2>
     <ol>
-      <li>把本仓库设为 <b>Public</b>（Settings → General → 最下 Change visibility）。</li>
-      <li>开启 <b>GitHub Pages</b>：Settings → Pages → Source 选 <code>main</code> 分支 <code>/ (root)</code> → Save。</li>
-      <li>生成一个 <b>Fine-grained token</b>，只授权本仓库、Contents 权限 <b>Read and write</b>。</li>
-      <li>把 token 发给团队成员，填进各自页面的 <code>data-token</code>。</li>
+      <li>本仓 = <b>Public</b>，GitHub Pages 已开启 → <a href="https://skipperjames.github.io/uep-squad-board/">skipperjames.github.io/uep-squad-board</a></li>
+      <li>数据仓 <code>skipperjames/niko-team-data</code> = <b>Private</b></li>
+      <li>token：Fine-grained，<b>只勾数据仓</b>，Contents = Read and write（三人共用一把）</li>
+      <li>成员各自把 token 粘进自己的页面 / NIKO 的 ⚙️ 同步设置</li>
     </ol>
   </div>
 
   <div class="card">
     <h2>数据长什么样</h2>
-    <p><code>board.json</code> 由看板首次同步时<b>自动创建</b>，结构：</p>
+    <p>数据仓里的 <code>board.json</code> 由看板首次同步时<b>自动创建</b>，结构：</p>
     <pre><code>{ "DATA": [ 每张资产卡 ], "TRASH": [回收站], "LOG": [操作记录],
   "DISCUSS": { 卡片讨论 }, "COLUMNS": [看板列], "_ts": 时间戳 }</code></pre>
   </div>
 
   <div class="card">
     <h2>状态自检</h2>
-    <p>打开任意植入了 team.js 的页面，看右上角状态灯：<br>
+    <p>打开任意植入了 team.js 的页面，看状态灯：<br>
       <span class="ok">🟢 已同步</span> = 通了 ·
       <span class="warn">🟡 本地模式</span> = 还没填 token ·
       <span style="color:#ef4444">🔴 失败</span> = token 权限或仓库名不对</p>
