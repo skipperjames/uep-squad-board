@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="default">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UE 团队看板 · 数据仓库</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:linear-gradient(160deg,#14141c,#101018 60%,#0d0d14);color:#d0d0d8;min-height:100vh;
+  padding:28px;font-size:14px;line-height:1.65}
+.wrap{max-width:820px;margin:0 auto}
+h1{font-size:24px;font-weight:800;margin-bottom:6px;background:linear-gradient(135deg,#818cf8,#a78bfa);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.sub{color:#888899;font-size:13px;margin-bottom:24px}
+.card{background:#1f1f2e;border:1px solid #333345;border-radius:14px;padding:18px 20px;margin-bottom:16px}
+.card h2{font-size:15px;font-weight:700;margin-bottom:10px;color:#c7c7d8}
+.card p{color:#a0a0b0;font-size:13px}
+code{background:#181824;color:#a78bfa;padding:2px 7px;border-radius:5px;font-size:12.5px;
+  font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+pre{background:#181824;border:1px solid #2a2a3d;border-radius:9px;padding:13px 15px;overflow-x:auto;margin:10px 0}
+pre code{background:none;color:#d0d0d8;padding:0}
+.ok{color:#10b981}.warn{color:#f59e0b}
+ol{padding-left:20px;color:#a0a0b0}ol li{margin-bottom:7px}
+a{color:#818cf8}
+.pill{display:inline-block;background:#181824;border:1px solid #333345;color:#888899;
+  font-size:11px;padding:2px 10px;border-radius:20px;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎮 UE 团队看板 · 数据仓库</h1>
+  <div class="sub">skipperjames / uep-squad-board · 三人小队（我 / 阿泽 / 小满）</div>
+
+  <div class="card">
+    <h2>这是什么？</h2>
+    <p>这个仓库有两个用途：<br>
+      ① <b>放 team.js</b>（看板植入组件，通过 GitHub Pages 对外提供）<br>
+      ② <b>放 board.json</b>（团队看板的数据，三人读写同一份）<br>
+      <span class="warn">注意：数据同步，不是文件同步。</span>HTML 只部署一次，数据放这里。</p>
+    <div style="margin-top:10px">
+      <span class="pill">team.js 植入组件</span>
+      <span class="pill">board.json 团队数据</span>
+      <span class="pill">18 个协作功能</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>植入到你的工作站（两行）</h2>
+    <pre><code>&lt;div id="niko-team" data-me="a"&gt;&lt;/div&gt;
+&lt;script src="https://skipperjames.github.io/uep-squad-board/team.js"&gt;&lt;/script&gt;</code></pre>
+    <p><code>data-me</code> 填你自己：<code>me</code>=我 · <code>a</code>=阿泽 · <code>b</code>=小满。
+    样式隔离（Shadow DOM），不会影响你页面一分一毫。</p>
+  </div>
+
+  <div class="card">
+    <h2>首次设置（管理员做一次）</h2>
+    <ol>
+      <li>把本仓库设为 <b>Public</b>（Settings → General → 最下 Change visibility）。</li>
+      <li>开启 <b>GitHub Pages</b>：Settings → Pages → Source 选 <code>main</code> 分支 <code>/ (root)</code> → Save。</li>
+      <li>生成一个 <b>Fine-grained token</b>，只授权本仓库、Contents 权限 <b>Read and write</b>。</li>
+      <li>把 token 发给团队成员，填进各自页面的 <code>data-token</code>。</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>数据长什么样</h2>
+    <p><code>board.json</code> 由看板首次同步时<b>自动创建</b>，结构：</p>
+    <pre><code>{ "DATA": [ 每张资产卡 ], "TRASH": [回收站], "LOG": [操作记录],
+  "DISCUSS": { 卡片讨论 }, "COLUMNS": [看板列], "_ts": 时间戳 }</code></pre>
+  </div>
+
+  <div class="card">
+    <h2>状态自检</h2>
+    <p>打开任意植入了 team.js 的页面，看右上角状态灯：<br>
+      <span class="ok">🟢 已同步</span> = 通了 ·
+      <span class="warn">🟡 本地模式</span> = 还没填 token ·
+      <span style="color:#ef4444">🔴 失败</span> = token 权限或仓库名不对</p>
+  </div>
+</div>
+</body>
+</html>
