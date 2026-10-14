@@ -361,6 +361,16 @@ function dateHint(date,done) {
   if(!date)return '';
   return '<span class="gd-due'+(!done&&date<D.today()?' is-overdue':'')+'">'+esc(date)+(!done&&date<D.today()?' · 已逾期':'')+'</span>';
 }
+/* 卡片用：交付日 + 剩 N 天 / 今天交 / 逾期 N 天 */
+function dueChip(date,done) {
+  if(!date)return '';
+  const md=date.slice(5);
+  if(done)return '<span class="gd-due">'+esc(md)+' 交</span>';
+  const diff=Math.round((new Date(date+'T00:00:00')-new Date(D.today()+'T00:00:00'))/86400000);
+  if(diff<0)return '<span class="gd-due is-overdue">'+esc(md)+' · 逾期 '+(-diff)+' 天</span>';
+  if(diff===0)return '<span class="gd-due is-today">'+esc(md)+' · 今天交</span>';
+  return '<span class="gd-due">'+esc(md)+' · 剩 '+diff+' 天</span>';
+}
 function details(label,text) {
   return text?'<div class="gd-detail"><span>'+esc(label)+'</span><p>'+esc(text)+'</p></div>':'';
 }
@@ -374,7 +384,7 @@ function actions(kind,id,extra) {
 }
 
 const GameDev = {
-  key:'gamedev',title:'游戏开发',icon:'gamepad',_tab:'devMilestone',_project:'',_query:'',_filter:'',_box:null,_clock:null,_member:'',
+  key:'gamedev',title:'游戏开发',icon:'gamepad',_tab:'devMilestone',_project:'',_query:'',_filter:'',_area:'',_stage:'',_soft:'',_box:null,_clock:null,_member:'',
   repaint(){render();return Promise.resolve();},
   project:function() {
     const projects=D.devAll('devProject');
@@ -392,10 +402,9 @@ const GameDev = {
     const summary=id?D.devTimeSummary(id,D.shift(D.today(),-6),D.today()):{minutes:0};
     const title='<div class="gd-heading"><div><div class="gd-eyebrow">UE / HOUDINI · 三人共享开发工作区</div><h2>一起把作品做出来</h2><p>计划、制作、验证与复盘，都围绕同一个项目。</p></div><button class="btn" data-gd-projects>'+I.get('gamepad')+'项目管理</button></div>';
     const picker='<div class="gd-project-bar"><label for="gd-project">当前项目</label><select class="input" id="gd-project" data-no-draft>'+optionList(projects.map(r=>[r.id,r.name+(r.status==='archived'?'（已归档）':'')]),id,projects.length?'':'还没有项目')+'</select><button class="btn btn-primary" data-gd-new-project>'+I.get('plus')+'新建项目</button></div>';
-    const info=p?'<section class="gd-project-card"><div class="gd-project-top"><div><h3>'+esc(p.name)+'</h3><div class="gd-meta">'+badge(p.status)+'<span>'+esc(p.engine || '未设置工具')+'</span>'+dateHint(p.targetDate,p.status==='released')+'</div></div><button class="btn btn-sm" data-gd-edit="devProject" data-id="'+esc(p.id)+'">编辑项目</button></div>'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+'<div class="gd-kpis">'+[
-      ['待完成任务',tasks.filter(r=>r.status!=='done').length+'','todo'],['待关闭 BUG',bugs.filter(r=>r.status!=='closed').length+'','shield'],
-      ['近 7 天工时',hours(summary.minutes),'clock'],['资产就绪',assets.filter(r=>assetProgress(r).percent===100).length+' / '+assets.length,'inbox']
-    ].map(function(k){return '<div class="gd-kpi"><span>'+I.get(k[2])+esc(k[0])+'</span><strong>'+esc(k[1])+'</strong></div>';}).join('')+'</div>'+this.resourcePanel(p)+'</section>':'';
+    const kpiItems=[['任务总数',tasks.length],['进行中',tasks.filter(r=>r.status==='doing').length],['待验收',tasks.filter(r=>r.status==='review').length],['待开发',tasks.filter(r=>r.status==='backlog').length],['未关闭 BUG',bugs.filter(r=>r.status!=='closed').length],['近 7 天工时',hours(summary.minutes)],['资产就绪',assets.filter(r=>assetProgress(r).percent===100).length+' / '+assets.length]];
+    const kpibar='<div class="gd-kpibar">'+kpiItems.map(function(k){return '<span><b>'+esc(String(k[1]))+'</b>'+esc(k[0])+'</span>';}).join('<i class="gd-kpibar-sep">·</i>')+'</div>';
+    const info=p?'<section class="gd-project-card"><div class="gd-project-top"><div><h3>'+esc(p.name)+'</h3><div class="gd-meta">'+badge(p.status)+'<span>'+esc(p.engine || '未设置工具')+'</span>'+dateHint(p.targetDate,p.status==='released')+'</div></div><button class="btn btn-sm" data-gd-edit="devProject" data-id="'+esc(p.id)+'">编辑项目</button></div>'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+kpibar+this.resourcePanel(p)+'</section>':'';
     const tabs='<div class="gd-tabs" role="tablist" aria-label="开发功能">'+TABS.map(function(t){return '<button role="tab" tabindex="'+(tab===t[0]?'0':'-1')+'" aria-selected="'+(tab===t[0])+'" class="gd-tab'+(tab===t[0]?' on':'')+'" data-gd-tab="'+t[0]+'">'+I.get(t[2])+'<span>'+t[1]+'</span><small>'+all(t[0]).length+'</small></button>';}).join('')+'</div>';
     if(!p)return title+picker+tabs+'<div class="gd-empty gd-welcome"><span class="gd-empty-icon">'+I.get('gamepad')+'</span><h3>先给你的作品建一个项目</h3><p>填写名称和目标，就能开始拆分里程碑、安排任务和记录开发。</p><button class="btn btn-primary" data-gd-new-project>创建第一个项目</button></div>';
     const toolbar='<div class="gd-toolbar"><div class="gd-search"><span>'+I.get('search')+'</span><input id="gd-search" class="input" aria-label="搜索当前功能" placeholder="搜索'+TABS.find(t=>t[0]===tab)[1]+'…" value="'+esc(this._query)+'"></div>'+this.filterSelect()+'<select id="gd-member" class="input" aria-label="筛选成员">'+optionList(Object.entries(ROLE).map(([id,r])=>[id,r.n]),this._member,'全部成员')+'</select><button class="btn btn-primary" data-gd-new="'+tab+'">'+I.get('plus')+NEW_LABELS[tab]+'</button></div>';
@@ -407,7 +416,27 @@ const GameDev = {
     if(tab==='devLog')body=this.logs(rows);
     if(tab==='devTime')body=this.times(rows,id);
     if(tab==='devAsset')body=this.assets(rows);
-    return title+picker+info+timerNotice+tabs+toolbar+'<section class="gd-content" role="tabpanel" aria-label="'+TABS.find(t=>t[0]===tab)[1]+'">'+body+'</section>';
+    return title+picker+info+timerNotice+tabs+this.filterBar(tab,tasks)+toolbar+'<section class="gd-content" role="tabpanel" aria-label="'+TABS.find(t=>t[0]===tab)[1]+'">'+body+'</section>';
+  },
+  filterBar:function(tab,tasks) {
+    if(tab!=='devTask')return '';
+    const area=this._area,stage=this._stage,soft=this._soft;
+    const AREA=[['','全部'],['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']];
+    const RAIL=[['art','美术开发',['资产制作','UV 拆分','材质制作','UI 制作','美术场景搭建']],['prog','程序开发',['玩法程序','系统功能','工具脚本','优化调优','联调测试']],['misc','通用 / 策划',['策划','评审','文档']]];
+    const head=AREA.map(function(a){return '<button type="button" class="gd-areabtn'+(area===a[0]?' on':'')+'" data-gd-area="'+a[0]+'">'+esc(a[1])+'</button>';}).join('');
+    const rail=RAIL.filter(function(g){return !area||area===g[0];}).map(function(g){
+      const items=g[2].map(function(s){
+        const n=tasks.filter(function(x){return (x.stage || '')===s;}).length;
+        return '<button type="button" class="gd-step'+(stage===s?' on':'')+'" data-gd-stage="'+esc(s)+'"><i></i>'+esc(s)+' <em>'+n+'</em></button>';
+      }).join('<span class="gd-railarr">›</span>');
+      return '<span class="gd-railgrp"><b>'+esc(g[1])+'</b>'+items+'</span>';
+    }).join('');
+    const softs=['Houdini','UE','Blender'].map(function(s){return '<button type="button" class="gd-softbtn'+(soft===s?' on':'')+'" data-gd-soft="'+s+'">'+s+'</button>';}).join('');
+    const dirty=!!(area||stage||soft);
+    return '<div class="gd-filterbar"><span class="gd-areaseg">'+head+'</span>'
+      +'<span class="gd-softseg"><em>软件</em>'+softs+'</span>'
+      +'<span class="gd-clearf'+(dirty?'':' gd-hide')+'" data-gd-clearflt>↺ 清空筛选</span></div>'
+      +'<div class="gd-rail">'+rail+'</div>';
   },
   filterSelect:function() {
     let choices=[];
@@ -418,6 +447,11 @@ const GameDev = {
   },
   matches:function(r) {
     if(this._member&&r.owner!==this._member)return false;
+    if(this._tab==='devTask'){
+      if(this._area&&(r.area || '')!==this._area)return false;
+      if(this._stage&&(r.stage || '')!==this._stage)return false;
+      if(this._soft&&String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean).indexOf(this._soft)<0)return false;
+    }
     if(this._query&&Object.keys(r).filter(k=>typeof r[k]==='string').map(k=>r[k]).join(' ').toLowerCase().indexOf(this._query.toLowerCase())<0)return false;
     const f=this._filter;
     if(!f)return true;
@@ -464,9 +498,11 @@ const GameDev = {
       });
       return '<section class="gd-column" data-gd-col="'+esc(status)+'"><div class="gd-column-title"><h3>'+LABELS[status]+'</h3><span>'+items.length+'</span></div>'+items.map(function(r){
         const dep=all.find(t=>t.id===r.dependsOn),milestone=milestones.find(m=>m.id===r.milestoneId),next=statuses[statuses.indexOf(status)+1];
-        const ownerName=(ROLE[r.owner] || ROLE[CONFIG.me] || {n:'未指派'}).n;
+        const role=ROLE[r.owner] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'};
+        const fresh=(r.updatedBy&&r.updatedBy!==CONFIG.me&&(Date.now()-(r._ut || 0))<180000)?'<span class="gd-fresh">'+esc(roleOf(r.updatedBy).n)+' 刚改过</span>':'';
+        const prog=r.prog==null?null:Math.max(0,Math.min(100,Number(r.prog)));
         const chips='<div class="gd-task-chips">'+(r.stage?'<span class="gd-chip">'+esc(r.stage)+'</span>':'')+String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean).map(function(s){return '<span class="gd-soft"><u>'+esc(({Houdini:'H',UE:'U',Blender:'B'})[s] || s.charAt(0))+'</u>'+esc(s)+'</span>';}).join('')+'</div>';
-        return '<article class="gd-task" draggable="true" data-gd-task="'+esc(r.id)+'"><div class="gd-meta">'+badge(r.priority)+'<span>'+esc(r.category)+'</span><button type="button" class="gd-owner" data-gd-owner="'+esc(r.id)+'" title="点击更换负责人">'+esc(ownerName)+' ▾</button></div><h4>'+esc(r.title)+'</h4>'+chips+dateHint(r.dueDate,status==='done')+(r.path?'<div class="gd-path" title="'+esc(r.path)+'">'+esc(r.path)+'</div>':'')+(milestone?'<div class="gd-meta">里程碑 · '+esc(milestone.title)+'</div>':'')+(dep?'<div class="gd-dependency'+(dep.status!=='done'?' is-blocked':'')+'">前置 · '+esc(dep.title)+(dep.status==='done'?'（完成）':'（未完成）')+'</div>':'')+(r.description||r.acceptance?'<details class="gd-expand"><summary>任务说明 / 验收</summary>'+details('说明',r.description)+details('验收',r.acceptance)+'</details>':'')+actions('devTask',r.id,next?'<button class="btn btn-sm" data-gd-advance="devTask" data-id="'+esc(r.id)+'">'+(next==='done'?'完成验收':'移至'+LABELS[next])+'</button>':'')+'</article>';
+        return '<article class="gd-task" draggable="true" data-gd-task="'+esc(r.id)+'"><div class="gd-meta">'+badge(r.priority)+'<span class="gd-cat">'+esc(r.category)+'</span>'+fresh+'</div><h4>'+esc(r.title)+'</h4>'+chips+'<div class="gd-meta gd-ownerline"><button type="button" class="gd-owner" data-gd-owner="'+esc(r.id)+'" title="点击更换负责人"><i class="gd-rdot" style="background:'+esc(role.c)+'"></i><b style="color:'+esc(role.c)+'">'+esc(role.n)+'</b> ▾</button>'+dueChip(r.dueDate,status==='done')+'</div>'+(prog==null?'':'<div class="gd-progbar"><i style="width:'+prog+'%"></i></div><div class="gd-meta gd-progtx">进度 '+prog+'%</div>')+(r.path?'<div class="gd-path" title="'+esc(r.path)+'">'+esc(r.path)+'</div>':'')+(milestone?'<div class="gd-meta">里程碑 · '+esc(milestone.title)+'</div>':'')+(dep?'<div class="gd-dependency'+(dep.status!=='done'?' is-blocked':'')+'">前置 · '+esc(dep.title)+(dep.status==='done'?'（完成）':'（未完成）')+'</div>':'')+(r.description||r.acceptance?'<details class="gd-expand"><summary>任务说明 / 验收</summary>'+details('说明',r.description)+details('验收',r.acceptance)+'</details>':'')+actions('devTask',r.id,next?'<button class="btn btn-sm" data-gd-advance="devTask" data-id="'+esc(r.id)+'">'+(next==='done'?'完成验收':'移至'+LABELS[next])+'</button>':'')+'</article>';
       }).join('')+(!items.length?'<div class="gd-column-empty">暂无任务</div>':'')+'</section>';
     }).join('')+'</div>';
   },
@@ -549,6 +585,11 @@ const GameDev = {
       }catch(err){App.toast(err.message,7000);}
     });
     box.addEventListener('click',function(e){
+      const ar=e.target.closest('[data-gd-area]'),st=e.target.closest('[data-gd-stage]'),so=e.target.closest('[data-gd-soft]'),cf=e.target.closest('[data-gd-clearflt]');
+      if(ar){self._area=ar.dataset.gdArea;self._stage='';self.repaint();return;}
+      if(st){self._stage=(self._stage===st.dataset.gdStage?'':st.dataset.gdStage);self.repaint();return;}
+      if(so){self._soft=(self._soft===so.dataset.gdSoft?'':so.dataset.gdSoft);self.repaint();return;}
+      if(cf){self._area='';self._stage='';self._soft='';self.repaint();return;}
       const ow=e.target.closest('[data-gd-owner]');
       if(ow){
         const oid=ow.dataset.gdOwner,cur=D.devAll('devTask').find(function(x){return x.id===oid;});
@@ -580,7 +621,7 @@ const GameDev = {
     this.repaint().then(()=>{const tab=this._box.querySelector('[role=tab][data-gd-tab="'+key+'"]');if(tab)tab.focus({preventScroll:true});});
   },
   resetFilters:function() {
-    this._query='';this._filter='';
+    this._query='';this._filter='';this._area='';this._stage='';this._soft='';
     const search=this._box&&this._box.querySelector('#gd-search');
     if(search){search.value='';search.defaultValue='';}
   },
@@ -610,7 +651,7 @@ const GameDev = {
     if(kind==='devMilestone')html=field('title','里程碑名称',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'planned')+field('dueDate','截止日期',r.dueDate,'date')+area('description','目标',r.description,'例如：完成可试玩的 10 分钟核心循环')+area('acceptance','交付 / 验收标准',r.acceptance,'明确做到什么程度算完成');
     if(kind==='devTask'){
       const milestones=D.devAll('devMilestone',p.id),tasks=D.devAll('devTask',p.id).filter(t=>t.id!==id);
-      html=field('title','任务名称',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'backlog')+select('category','工作分类',schema.choices.category,r.category || '程序')+select('priority','优先级',schema.choices.priority,r.priority || 'mid')+field('dueDate','截止日期',r.dueDate,'date')+select('milestoneId','所属里程碑',milestones.map(m=>[m.id,m.title]),r.milestoneId,'不关联')+select('dependsOn','前置任务',tasks.map(t=>[t.id,t.title]),r.dependsOn,'无前置任务')+area('description','任务说明',r.description)+area('acceptance','验收标准',r.acceptance,'例如：手柄与键鼠均可完成交互，没有报错')+select('area','分区',[['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']],r.area || 'art')+select('stage','流程阶段',STAGE_LIST,r.stage,'未设置')+field('soft','主要软件',r.soft,'text','maxlength="200" placeholder="Houdini,UE,Blender（逗号分隔）"')+field('path','UE 资源路径',r.path,'text','maxlength="2000" placeholder="/Game/HuoDong/…"');
+      html=field('title','任务名称',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'backlog')+select('category','工作分类',schema.choices.category,r.category || '程序')+select('priority','优先级',schema.choices.priority,r.priority || 'mid')+field('dueDate','截止日期',r.dueDate,'date')+select('milestoneId','所属里程碑',milestones.map(m=>[m.id,m.title]),r.milestoneId,'不关联')+select('dependsOn','前置任务',tasks.map(t=>[t.id,t.title]),r.dependsOn,'无前置任务')+area('description','任务说明',r.description)+area('acceptance','验收标准',r.acceptance,'例如：手柄与键鼠均可完成交互，没有报错')+select('area','分区',[['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']],r.area || 'art')+select('stage','流程阶段',STAGE_LIST,r.stage,'未设置')+field('soft','主要软件',r.soft,'text','maxlength="200" placeholder="Houdini,UE,Blender（逗号分隔）"')+field('path','UE 资源路径',r.path,'text','maxlength="2000" placeholder="/Game/HuoDong/…"')+field('prog','进度 %',r.prog==null?'':r.prog,'number','min="0" max="100" step="5" placeholder="0 - 100"');
     }
     if(kind==='devBug')html=field('title','BUG 标题',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'open')+select('severity','严重程度',schema.choices.severity,r.severity || 'medium')+field('environment','环境 / 软件版本',r.environment,'text','maxlength="1000"')+area('steps','复现步骤',r.steps,'1. 打开关卡\n2. 执行操作\n3. 观察结果')+area('expected','预期结果',r.expected)+area('actual','实际结果',r.actual)+area('solution','修复 / 验证记录',r.solution)+'<div class="gd-field gd-full"><span>问题截图（最多 2 张，每张不超过 1 MB）</span><input id="gd-bug-files" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple><div id="gd-bug-previews" class="gd-screenshots"></div><p class="gd-note">截图上传到同一团队私有仓。移除引用保留原文件；本地模拟模式刷新后截图重置。</p></div>';
     if(kind==='devLog')html=field('date','记录日期',r.date || D.today(),'date','required')+area('done','完成 / 进展',r.done,'今天实现了什么？尝试了哪些方案？')+area('blockers','遇到的阻碍',r.blockers,'当前卡在哪里？还需要验证什么？')+area('next','下次继续',r.next,'留下下一次打开项目时的第一步');
@@ -643,6 +684,7 @@ const GameDev = {
         e.preventDefault();if(loading)return;
         const payload={};form.querySelectorAll('[name]').forEach(el=>{if(el.name.indexOf('check-')!==0)payload[el.name]=el.value.trim();});
         if(kind!=='devProject')payload.projectId=r.projectId || p.id;
+        if(kind==='devTask')payload.prog=(payload.prog===''||payload.prog==null)?0:Math.max(0,Math.min(100,Number(payload.prog)));
         if(kind==='devLog'&&!payload.done&&!payload.blockers&&!payload.next){App.toast('至少填写一项进展、阻碍或下一步');return;}
         if(kind==='devTime'){payload.minutes=Number(payload.minutes);payload.startedAt=0;payload.endedAt=0;payload.sessionId='';payload.sessionStartedAt=0;payload.sessionEndedAt=0;}
         if(kind==='devBug')payload.images=images;
@@ -1182,6 +1224,42 @@ const GameDev = {
 .gd-owner:hover { border-bottom-color:var(--accent); }
 .gd-path { font-size:10.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:2px 0 4px; }
 .gd-owner-pick { display:flex;flex-wrap:wrap;gap:8px; }
+/* ================= v2.3 顶部区：一行 KPI / 分区 / 流程阶段 / 软件 ================= */
+.gd-kpibar { display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px;font-size:12px;color:var(--muted);line-height:1.9; }
+.gd-kpibar b { color:var(--ink);font-size:15px;font-weight:650;font-variant-numeric:tabular-nums;margin-right:4px; }
+.gd-kpibar-sep { color:var(--line);font-style:normal; }
+.gd-filterbar { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;font-size:12px; }
+.gd-areaseg,.gd-softseg { display:inline-flex;align-items:center;gap:2px;flex-wrap:wrap; }
+.gd-areaseg { border-right:1px solid var(--line);padding-right:10px; }
+.gd-softseg em { font-style:normal;color:var(--muted);font-size:11px;margin-right:4px; }
+.gd-areabtn,.gd-softbtn { font:inherit;font-size:12px;color:var(--muted);background:none;border:0;border-radius:7px;padding:4px 9px;cursor:pointer; }
+.gd-areabtn:hover,.gd-softbtn:hover { background:var(--surface-2);color:var(--ink); }
+.gd-areabtn.on,.gd-softbtn.on { color:var(--brand-ink);background:var(--brand-soft);font-weight:600; }
+.gd-clearf { color:var(--accent);cursor:pointer;margin-left:auto;font-size:11.5px; }
+.gd-clearf.gd-hide { visibility:hidden; }
+.gd-rail { display:flex;align-items:center;flex-wrap:wrap;gap:2px 0;margin:0 0 16px;font-size:11px;color:var(--muted); }
+.gd-railgrp { display:inline-flex;align-items:center;gap:2px; }
+.gd-railgrp + .gd-railgrp { border-left:1px solid var(--line);margin-left:8px;padding-left:10px; }
+.gd-railgrp > b { font-weight:500;color:var(--muted);font-size:10.5px;margin-right:5px; }
+.gd-railarr { color:var(--line);margin:0 3px; }
+.gd-step { display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:11px;color:var(--muted);background:none;border:0;padding:3px 6px;border-radius:6px;cursor:pointer;white-space:nowrap; }
+.gd-step:hover { background:var(--surface-2);color:var(--ink); }
+.gd-step.on { color:var(--brand-ink);background:var(--brand-soft);font-weight:600; }
+.gd-step i { width:5px;height:5px;border-radius:50%;background:var(--line);flex:none; }
+.gd-step.on i { background:var(--brand); }
+.gd-step em { font-style:normal;color:var(--muted);font-size:10px; }
+/* ---- 卡片 v2.3：负责人圆点 / 进度条 / 刚改过 ---- */
+.gd-ownerline { justify-content:flex-start;gap:6px; }
+.gd-owner { margin-left:0;display:inline-flex;align-items:center;gap:5px; }
+.gd-owner b { font-weight:600; }
+.gd-rdot { width:7px;height:7px;border-radius:50%;flex:none;display:inline-block; }
+.gd-cat { color:var(--muted); }
+.gd-fresh { color:#ef4444;font-size:10.5px;border:1px solid currentColor;border-radius:5px;padding:0 5px;line-height:1.6; }
+.gd-progbar { height:5px;border-radius:8px;background:var(--surface-3);overflow:hidden;margin:8px 0 4px; }
+.gd-progbar i { display:block;height:100%;background:var(--brand);border-radius:inherit; }
+.gd-progtx { font-size:10.5px; }
+.gd-due.is-today { color:#f59e0b; }
+@media (max-width:700px){ .gd-clearf{margin-left:0;} }
 /* ---- 拖动排序 ---- */
 .gd-task[draggable="true"] { cursor:grab; }
 .gd-task.gd-dragging { opacity:.45;border-style:dashed; }
@@ -1242,6 +1320,10 @@ const GameDev = {
   .gd-actions>.gd-meta{margin-right:auto}.modal .mbox{width:min(760px,calc(100vw - 24px));max-width:none;max-height:90vh}.modal .mbd{overflow:auto;max-height:70vh}.closeX{border:0;background:transparent;color:var(--text);display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:36px}
   .top select{width:auto;max-width:150px;padding:5px}.top .syncdot{min-height:32px}.top .brand{white-space:normal}
   .gd-toolbar>select{width:auto;max-width:180px}.gd-project-bar select{max-width:none}.gd-project-desc{max-width:none}
+  /* v2.3 编辑弹窗：居中加宽 + 任务说明大编辑区 */
+  .modal.genericModal .mbox{width:min(1060px,calc(100vw - 24px));max-height:92vh}
+  .modal.genericModal .mbd{max-height:none}
+  .modal.genericModal .gd-field textarea{min-height:220px}
   @media(hover:hover) and (pointer:fine){.gd-card:hover,.gd-task:hover{transform:translateY(-2px);border-color:var(--accent)}}
   @media(max-width:700px){.gd-root{padding:12px}.gd-heading{flex-wrap:wrap}.modal .mbox{width:calc(100vw - 16px)}.drawer{width:calc(100vw - 12px);max-width:440px}.cols{grid-template-columns:1fr!important}.gd-toolbar>select{max-width:none}.gb,.btn{min-height:36px}.top .brand small{display:block}}
   @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}.card:hover,.gd-card:hover,.gd-task:hover{transform:none}}
