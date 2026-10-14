@@ -479,7 +479,7 @@ const GameDev = {
       const lb=head.join(' ') || '链接';
       items.push({ic:ic,lb:lb,vl:seg[1] || '',sub:seg[2] || ''});
     });
-    if(!items.length && !notes.length && !p.notice)return '';
+    if(!items.length && !notes.length && !p.notice)return '<div class="gd-res gd-res-empty"><span class="gd-res-h">📌 项目资源</span><span class="gd-res-hint">工程总路径 / 素材网盘 / 排期表 / 策划文档 / ⚠️注意事项 / 📢公告 —— 点右上「编辑项目」填一次，全组都能用</span></div>';
     return '<div class="gd-res">'
       + (items.length ? '<div class="gd-res-grid">' + items.map(function(it){
           return '<div class="gd-res-i"><span class="gd-res-ic">' + esc(it.ic) + '</span><span class="gd-res-tx"><b>' + esc(it.lb) + (it.sub ? '　·　' + esc(it.sub) : '') + '</b><i>' + esc(it.vl) + '</i></span></div>';
@@ -1213,6 +1213,9 @@ const GameDev = {
 .gd-res-tx { min-width:0;display:flex;flex-direction:column; }
 .gd-res-tx b { font-size:10.5px;font-weight:500;color:var(--muted); }
 .gd-res-tx i { font-style:normal;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.gd-res-empty { display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--card-border);padding-top:11px;margin-top:12px; }
+.gd-res-empty .gd-res-h { font-size:12px;font-weight:600; }
+.gd-res-empty .gd-res-hint { font-size:11.5px;color:var(--muted);line-height:1.7; }
 .gd-res-notes { margin-top:9px;border-left:3px solid #f59e0b;background:rgba(245,158,11,.09);border-radius:0 8px 8px 0;padding:8px 12px;font-size:11.5px;line-height:1.75; }
 .gd-res-notes b { color:#f59e0b;font-size:11px; }
 .gd-res-notes ul { margin:3px 0 0;padding-left:16px; }
