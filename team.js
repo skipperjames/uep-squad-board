@@ -59,7 +59,7 @@
   const ROLE = {
     me: { n: '我',   c: '#667eea', r: '制作人/策划' },
     a:  { n: '月饼', c: '#34d399', r: '程序' },
-    b:  { n: '邢锦', c: '#f59e0b', r: '美术TA' }
+    b:  { n: '邢锦', c: '#e879f9', r: '美术TA' }
   };
   const SYNC_PREFIX = 'niko_team_';
 
@@ -89,7 +89,7 @@
   const fmtT = t => { const d = new Date(t); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
   const daysLeft = ms => Math.round((ms - now()) / 86400000);
   const dstr = ms => { const d = new Date(ms); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
-  const fieldLabel = f => ({ prog:'进度', note:'备注', owner:'负责人', status:'状态', pri:'优先级', due:'交付日', name:'名称',__timeResult:'计时结束与耗时',title:'标题',description:'说明',acceptance:'验收标准',dependsOn:'前置任务' }[f] || f);
+  const fieldLabel = f => ({ prog:'进度', note:'任务说明', owner:'负责人', status:'状态', pri:'优先级', due:'交付日', name:'名称',__timeResult:'计时结束与耗时',title:'标题',description:'说明',acceptance:'验收标准',dependsOn:'前置任务' }[f] || f);
   const fieldVal = (f, v) => {
     if (f === 'status') return ST[v] ? ST[v].l : v;
     if (f === 'owner') return (ROLE[v] || {}).n || v;
@@ -933,10 +933,11 @@ const GameDev = {
   /* 2026-10-13 由「右侧抽屉」改「居中弹窗」（用户要求：编辑窗口放中间）+ 遮罩 + 备注框放大 */
   .dscrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:4;opacity:0;pointer-events:none;transition:opacity .22s}
   .dscrim.show{opacity:1;pointer-events:auto}
-  .drawer{position:fixed;left:50%;top:50%;width:min(640px,94%);max-height:88%;background:var(--card-bg);border:1px solid var(--card-border);border-radius:14px;z-index:5;transform:translate(-50%,-50%) scale(.97);opacity:0;pointer-events:none;transition:transform .22s ease,opacity .22s ease;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.34)}
+  .drawer{position:fixed;left:50%;top:50%;width:min(940px,96%);max-height:90%;background:var(--card-bg);border:1px solid var(--card-border);border-radius:14px;z-index:5;transform:translate(-50%,-50%) scale(.97);opacity:0;pointer-events:none;transition:transform .22s ease,opacity .22s ease;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.34)}
   .drawer.show{transform:translate(-50%,-50%) scale(1);opacity:1;pointer-events:auto}
   .dhd{padding:12px 16px;border-bottom:1px solid var(--card-border);display:flex;align-items:center;gap:9px;font-weight:700}
   .dbd{padding:14px 16px;overflow-y:auto;flex:1}
+  .noteArea{min-height:220px;line-height:1.7}
   .dft{padding:11px 16px;border-top:1px solid var(--card-border);display:flex;gap:8px}
   .closeX{margin-left:auto;cursor:pointer;color:var(--muted);font-size:17px;line-height:1;padding:2px 6px;border-radius:5px}
   .closeX:hover{background:var(--card-bg-2);color:var(--text)}
@@ -1498,7 +1499,7 @@ const GameDev = {
       </div>
       <div class="field"><div class="flabel">进度 <b id="progVal">${a.prog}%</b></div>
         <input type="range" id="fProg" min="0" max="100" value="${a.prog}"></div>
-      <div class="field"><div class="flabel">备注</div><textarea id="fNote" class="noteArea">${esc(a.note)}</textarea></div>
+      <div class="field"><div class="flabel">📝 任务说明</div><textarea id="fNote" class="noteArea" placeholder="要做什么、做到什么程度、和谁配合…（可写长）">${esc(a.note)}</textarea></div>
       <div class="flabel" style="margin-top:4px">💬 讨论（${dcount}）· 讨论留在卡上，三个月后还能查到</div>
       <div class="disc" id="discList">
         ${(DISCUSS[a.id] || []).map(d => `<div class="disc-i">${av(d.u, 22)}
