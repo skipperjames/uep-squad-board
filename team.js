@@ -705,9 +705,12 @@ const GameDev = {
     if(MODE==='legacy'){if(GameDev._clock)clearInterval(GameDev._clock);renderLegacy();return;}
     root.querySelector('.t-root').dataset.th=curTheme();
     const surf=root.querySelector('.surface'),active=root.activeElement,search=active?.id==='gd-search',pos=active?.selectionStart;
-    surf.innerHTML='<div class="top"><div class="brand">🎮 UE 团队开发 <small>'+VERSION+'</small></div><div class="spacer"></div><label>我是谁 <select id="devMe">'+Object.entries(ROLE).map(([k,r])=>'<option value="'+esc(k)+'" '+(k===CONFIG.me?'selected':'')+'>'+esc(r.n)+'</option>').join('')+'</select></label><button class="gb" id="legacyMode">旧看板 · '+DATA.length+'</button><button class="gb" id="devTrash">回收站</button><button class="gb" id="devLogHistory">团队历史</button><button class="gb" id="devSync">同步设置</button><button class="syncdot" id="devPull"><i></i><span class="stxt"></span></button></div>'+conflictBanner()+'<div class="gd-root">'+GameDev.body()+'</div>';
+    surf.innerHTML='<div class="top"><div class="brand">🎮 UE 团队开发 <small>'+VERSION+'</small></div><div class="spacer"></div><div class="topset" id="devTopSet"><button class="gb gb-set" id="devSetToggle" aria-expanded="false">⚙️ 设置 <span class="cs">▾</span></button><div class="topset-panel"><label>我是谁 <select id="devMe">'+Object.entries(ROLE).map(([k,r])=>'<option value="'+esc(k)+'" '+(k===CONFIG.me?'selected':'')+'>'+esc(r.n)+'</option>').join('')+'</select></label><button class="gb" id="legacyMode">旧看板 · '+DATA.length+'</button><button class="gb" id="devTrash">回收站</button><button class="gb" id="devLogHistory">团队历史</button><button class="gb" id="devSync">同步设置</button><p class="topset-note">只设一次，之后本机记住 —— 所以默认收起。</p></div></div><button class="syncdot" id="devPull"><i></i><span class="stxt"></span></button></div>'+conflictBanner()+'<div class="gd-root">'+GameDev.body()+'</div>';
     GameDev._box=surf.querySelector('.gd-root');GameDev.bind(GameDev._box);hydrateImages();
     root.querySelector('#legacyMode').onclick=()=>{MODE='legacy';render();};root.querySelector('#devTrash').onclick=showDevTrash;root.querySelector('#devLogHistory').onclick=showReplay;root.querySelector('#devSync').onclick=showSyncPanel;root.querySelector('#devPull').onclick=()=>pull();
+    const setBox=root.querySelector('#devTopSet'),setBtn=root.querySelector('#devSetToggle');
+    if(setBtn)setBtn.onclick=e=>{e.stopPropagation();const on=setBox.classList.toggle('open');setBtn.setAttribute('aria-expanded',on?'true':'false');};
+    if(setBox)surf.querySelector('.top').addEventListener('click',e=>{if(!e.target.closest('#devTopSet')){setBox.classList.remove('open');setBtn&&setBtn.setAttribute('aria-expanded','false');}});
     root.querySelector('#devMe').onchange=e=>{CONFIG.me=e.target.value;try{localStorage.setItem(SYNC_PREFIX+'me',CONFIG.me);}catch(e){}render();};root.querySelector('#resolveDev')?.addEventListener('click',resolveConflict);
     setDot(...syncStatus);if(search){const el=root.querySelector('#gd-search');el.focus();el.setSelectionRange(pos,pos);}
     try{localStorage.setItem(SYNC_PREFIX+'prefs',JSON.stringify({project:GameDev._project,tab:GameDev._tab,member:GameDev._member}));}catch(e){}
@@ -1320,6 +1323,16 @@ const GameDev = {
   .gd-actions>.gd-meta{margin-right:auto}.modal .mbox{width:min(760px,calc(100vw - 24px));max-width:none;max-height:90vh}.modal .mbd{overflow:auto;max-height:70vh}.closeX{border:0;background:transparent;color:var(--text);display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:36px}
   .top select{width:auto;max-width:150px;padding:5px}.top .syncdot{min-height:32px}.top .brand{white-space:normal}
   .gd-toolbar>select{width:auto;max-width:180px}.gd-project-bar select{max-width:none}.gd-project-desc{max-width:none}
+  /* v2.4 顶部设置折叠：平时只有一行「⚙️ 设置 ▾」 */
+  .topset{position:relative}
+  .topset-panel{position:absolute;right:0;top:calc(100% + 6px);z-index:60;display:none;flex-direction:column;gap:6px;align-items:stretch;background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:10px;min-width:210px;box-shadow:0 14px 40px rgba(0,0,0,.30)}
+  .topset.open .topset-panel{display:flex}
+  .topset-panel label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);white-space:nowrap}
+  .topset-panel .gb{text-align:left;justify-content:flex-start}
+  .topset-note{margin:2px 0 0;font-size:10.5px;color:var(--muted);line-height:1.7}
+  .topset .gb-set{white-space:nowrap}
+  .topset .gb-set .cs{opacity:.65}
+  .topset.open .gb-set .cs{display:inline-block;transform:rotate(180deg)}
   /* v2.3 编辑弹窗：居中加宽 + 任务说明大编辑区 */
   .modal.genericModal .mbox{width:min(1060px,calc(100vw - 24px));max-height:92vh}
   .modal.genericModal .mbd{max-height:none}
