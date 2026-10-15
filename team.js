@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.5.0-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
+  const VERSION = 'v2.5.1-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -598,11 +598,11 @@ function actions(kind,id,extra) {
           + '</div><div class="tk-lane-bd">';
         this.stOrder().forEach(k=>{
           const sub = list.filter(t=>t.status===k);
-          s += '<div class="tk-cell"><div class="ct">'+this.stName(k)+' '+sub.length+'</div>';
+          s += '<div class="tk-cell" data-tk-cell="'+esc(k)+'" data-tk-area="'+esc(A[0])+'"><div class="ct">'+this.stName(k)+' '+sub.length+'</div>';
           sub.forEach(t=>{
             const dep = t.dependsOn ? this.find(all, t.dependsOn) : null;
             const blocked = dep && dep.status !== 'done';
-            s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+'" data-tk-open="'+esc(t.id)+'">'
+            s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+'" draggable="true" data-tk-card="'+esc(t.id)+'" data-tk-open="'+esc(t.id)+'">'
               + '<div style="display:flex;gap:5px;align-items:baseline"><span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span></div>'
               + (dep?'<div class="tk-wait">⛓ 等「'+esc(dep.title)+'」'+(blocked?'（还没完成）':'（已解锁）')+'</div>':'')
               + (t.stage||t.soft?'<div class="tk-meta">'+esc(t.stage||'')+(t.soft?' · '+esc(String(t.soft).split(/[,，;；\s]+/)[0]):'')+'</div>':'')
@@ -618,7 +618,9 @@ function actions(kind,id,extra) {
       });
       const nb = tasks.filter(t=>{const d=t.dependsOn&&this.find(all,t.dependsOn);return d&&d.status!=='done'&&t.status!=='done';}).length;
       return s + '<div style="font-size:11px;color:var(--muted);line-height:1.75">'
-        + '左缘红条 = 前置没完成，现在做也推不动（'+nb+' 条）。泳道头的橙字是「本泳道堆积最多的那一格」。点泳道头可折叠；点卡片看右侧详情，双击才编辑。</div>';
+        + '左缘红条 = 前置没完成，现在做也推不动（'+nb+' 条）。泳道头的橙字是「本泳道堆积最多的那一格」。'
+        + '<b>卡片可以直接拖</b>（拖到别的状态格 = 改状态，拖到别的泳道 = 换分区，同一格内拖动 = 调顺序）；'
+        + '点卡片看右栏详情，双击才进编辑。</div>';
     },
     /* ---- 视图 2 · 总表 ---- */
     sorted(list){
@@ -883,6 +885,52 @@ function actions(kind,id,extra) {
         const v = e.target.value.trim();
         clearTimeout(tm);
         tm = setTimeout(()=>{ self.kw = v; g.repaint(); }, 220);
+      });
+      /* ---- 拖拽（v2.5.1）：卡片直接拖到别的状态 / 别的泳道，并记住顺序 ---- */
+      let dragId = null;
+      box.addEventListener('dragstart', function(e){
+        const c = e.target.closest('[data-tk-card]'); if(!c) return;
+        dragId = c.dataset.tkCard; c.classList.add('tk-dragging');
+        try { e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', dragId); } catch(x){}
+      });
+      box.addEventListener('dragend', function(){
+        box.querySelectorAll('.tk-dragging').forEach(c=>c.classList.remove('tk-dragging'));
+        box.querySelectorAll('.tk-cell.over').forEach(c=>c.classList.remove('over'));
+        dragId = null;
+      });
+      box.addEventListener('dragover', function(e){
+        const cell = e.target.closest('[data-tk-cell]');
+        if(!cell || !dragId) return;
+        e.preventDefault();
+        try { e.dataTransfer.dropEffect='move'; } catch(x){}
+        box.querySelectorAll('.tk-cell.over').forEach(c=>{ if(c!==cell) c.classList.remove('over'); });
+        cell.classList.add('over');
+      });
+      box.addEventListener('drop', function(e){
+        const cell = e.target.closest('[data-tk-cell]');
+        if(!cell || !dragId) return;
+        e.preventDefault();
+        box.querySelectorAll('.tk-cell.over').forEach(c=>c.classList.remove('over'));
+        const id = dragId; dragId = null;
+        const rec = D.devAll('devTask').filter(x=>x.id===id)[0]; if(!rec) return;
+        const status = cell.dataset.tkCell, area = cell.dataset.tkArea;
+        if(!status) return;
+        const cards = [].slice.call(cell.querySelectorAll('[data-tk-card]')).filter(c=>c.dataset.tkCard!==id);
+        let index = cards.length;
+        for(let i=0;i<cards.length;i++){ const r=cards[i].getBoundingClientRect(); if(e.clientY < r.top + r.height/2){ index=i; break; } }
+        const moved = status !== rec.status || (area && area !== (rec.area || 'misc'));
+        try {
+          const patch = { status: status }; if(area) patch.area = area;
+          D.devSave('devTask', patch, id);
+          const list = D.devAll('devTask').filter(function(x){
+            return x.projectId===rec.projectId && x.status===status && (x.area||'misc')===(area||x.area||'misc');
+          }).sort(function(a,b){ const ao=(a.order==null?9999:a.order), bo=(b.order==null?9999:b.order); return ao-bo; });
+          const at = list.findIndex(function(x){ return x.id===id; }); if(at>=0) list.splice(at,1);
+          list.splice(Math.max(0, Math.min(index, list.length)), 0, rec);
+          list.forEach(function(x,i){ if(x.order!==i) D.devSave('devTask',{order:i},x.id); });
+          g.repaint();
+          App.toast(moved ? ('已移到「'+LABELS[status]+'」') : ('已调整顺序（第 '+(index+1)+' 位）'));
+        } catch(err){ App.toast(err.message, 7000); }
       });
     },
     /* 键盘（由 onKeydown 转发） */
@@ -1350,7 +1398,7 @@ const GameDev = {
         if(kind==='devBug')payload.images=images;
         if(kind==='devAsset')payload.checks=checks;
         try{if(id){Object.keys(payload).forEach(k=>{if(equal(payload[k],r[k])||(typeof payload[k]==='string'&&!payload[k]&&!r[k]))delete payload[k];});const current=D.devAll(kind).find(x=>x.id===id);if(current)Object.entries(payload).forEach(([field,mine])=>{if(!equal(current[field],r[field])&&!equal(current[field],mine)){const key=D.KEYS[kind]+'|'+id+'|'+field;if(!CONFLICTS.some(c=>c.key===key))CONFLICTS.push({key,kind:D.KEYS[kind],id,field,mine,theirs:current[field],by:current.updatedBy,title:current.title||current.name||id});}});}
-        const saved=D.devSave(kind,payload,id);delete localDrafts[draftKey];try{saveDrafts();}catch(e){toast('记录已保存，草稿清理失败','warn');}releaseLock();modalOptions=null;if(kind==='devProject'){self._project=saved.id;self.resetFilters();}App.closeModal();self.repaint();App.toast(id?'修改已保存':'记录已创建');}
+        const saved=D.devSave(kind,payload,id);EDIT_DIRTY=false;delete localDrafts[draftKey];try{saveDrafts();}catch(e){toast('记录已保存，草稿清理失败','warn');}releaseLock();modalOptions=null;if(kind==='devProject'){self._project=saved.id;self.resetFilters();}App.closeModal();self.repaint();App.toast(id?'修改已保存':'记录已创建');}
         catch(err){App.toast(err.message,8000);}
       };
       const first=form.querySelector('input,textarea,select');if(first)first.focus({preventScroll:true});
@@ -2142,6 +2190,10 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tk-cell .ct .hot{margin-left:auto;color:#f5a524;font-weight:600;opacity:1}
   .tk-card .tt{font-size:12px;font-weight:600;line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .tk-wait{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#f5a524;border:1px dashed #f5a52455;border-radius:5px;padding:0 5px;margin-top:4px}
+  .tk-card[draggable="true"]{cursor:grab}
+  .tk-card[draggable="true"]:active{cursor:grabbing}
+  .tk-card.tk-dragging{opacity:.4;border-style:dashed}
+  .tk-cell.over{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
   .tk-meta{font-size:10.5px;color:var(--muted);opacity:.85;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* 视图 2 · 总表 */
   .tk-tw{overflow:auto;border:1px solid var(--card-border);border-radius:11px;max-height:calc(100vh - 300px)}
@@ -2298,7 +2350,12 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     const gmFootEl = root.querySelector('#gmFoot');
     if (gmFootEl) gmFootEl.addEventListener('click', ev => {
       const b = ev.target.closest('button');
-      if (b && (b.classList.contains('pri') || b.classList.contains('danger'))) EDIT_DIRTY = false;  // 保存/删除 = 有意提交
+      /* ⚠️ 保存按钮是 <button class="btn btn-primary" id="gd-editor-save">，不是 .pri ——
+         v2.5.0 只判了 pri/danger，所以点「更改保存」后仍被当成脏数据拦下来（用户实测）。
+         现在：页脚上的按钮 = 用户的有意动作，一律不再拦；只有 ✕ / 点空白 / Esc 才走脏数据守卫。 */
+      if (b.id === 'gd-editor-save' || b.id === 'gd-editor-del' || b.id === 'gd-editor-cancel'
+          || b.classList.contains('btn-primary') || b.classList.contains('pri')
+          || b.classList.contains('danger') || b.classList.contains('btn-danger')) EDIT_DIRTY = false;
     });
     root.querySelector('#cfClose').onclick = () => closeModal('conflictModal');
     root.addEventListener('click', onRootClick);
