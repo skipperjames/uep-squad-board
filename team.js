@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.4.5-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
+  const VERSION = 'v2.5.0-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -139,6 +139,7 @@
   const totalRecords=()=>DATA.length+Object.values(DEV).reduce((n,rows)=>n+rows.length,0);
   let DELETED = {}, EXTRA = {}, BASE = null, SAVED = null, CONFLICTS = [];
   let MODE = 'dev', syncStatus = ['warn','本地模式'], localDrafts = {}, modalOptions = null, modalReturn = null;
+  let EDIT_DIRTY = false;   // v2.5：编辑弹窗脏数据标记
   let monotonic = 0;
   const tick = () => monotonic = Math.max(now(),monotonic+1);
   const sharedKeys = ['DATA',...Object.values(DEV_KEYS)];
@@ -481,6 +482,429 @@ function actions(kind,id,extra) {
   return '<div class="gd-actions">'+(extra || '')+'<button class="btn btn-sm" data-gd-disc="'+kind+'" data-id="'+esc(id)+'">讨论</button><button class="btn btn-sm" data-gd-history="'+esc(id)+'">历史</button><span class="gd-meta">'+esc(roleOf(D.devAll(kind).find(r=>r.id===id)?.owner).n)+' · 记录人 '+esc(roleOf(D.devAll(kind).find(r=>r.id===id)?.recorder).n)+'</span><button class="btn btn-sm" data-gd-edit="'+kind+'" data-id="'+esc(id)+'">编辑</button><button class="btn btn-ghost btn-sm" data-gd-delete="'+kind+'" data-id="'+esc(id)+'">删除</button></div>';
 }
 
+  /* ============================================================
+     TBoard（v2.5）—— 任务看板重设计层
+     只读 D（DevData）的公开方法；写入一律走 D.devSave / D.devRemove
+     ============================================================ */
+  const TB_ST = { backlog:'#94a3b8', doing:'var(--accent)', review:'#f5a524', done:'#10b981' };
+  const TB_AREAS = [['art','🎨 美术开发','#e879f9'],['prog','💻 程序开发','#34d399'],['misc','🧩 通用 / 策划','#94a3b8']];
+  const TBoard = {
+    view:'lane', rail:true, rmode:'today', rsel:'', den:'1', projOpen:false,
+    grp:{}, laneMin:{}, sel:new Set(), sort:{k:'dueDate',dir:1}, trash:[], kw:'',
+    /* ---- 基础 ---- */
+    stOrder(){ return D.DEV_SCHEMA.devTasks.choices.status.slice(); },
+    stName(s){ return LABELS[s] || s; },
+    stack(tasks, projectId, member){
+      let list = tasks;
+      if(member) list = list.filter(t => t.owner === member);
+      if(this.kw) list = list.filter(t => JSON.stringify(t).toLowerCase().indexOf(this.kw.toLowerCase()) >= 0);
+      return list;
+    },
+    daysTo(d){ return Math.round((new Date(d+'T00:00:00') - new Date(D.today()+'T00:00:00')) / 86400000); },
+    due(t){
+      if(!t.dueDate) return '';
+      const dd = this.daysTo(t.dueDate);
+      if(t.status === 'done') return '<span class="tk-due done">已完成</span>';
+      if(dd < 0) return '<span class="tk-due over">逾期 '+(-dd)+' 天</span>';
+      if(dd === 0) return '<span class="tk-due over">今天到期</span>';
+      if(dd <= 2) return '<span class="tk-due soon">'+dd+' 天后</span>';
+      return '<span class="tk-due ok">'+dd+' 天后</span>';
+    },
+    pri(t){ return {high:'P1',mid:'P2',low:'P3'}[t.priority] || 'P2'; },
+    av(id){ const r = ROLE[id] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'}; return '<i class="tk-av" title="'+esc(r.n)+'" style="background:'+esc(r.c)+'">'+esc(String(r.n).slice(0,1))+'</i>'; },
+    ownerName(id){ const r = ROLE[id] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'}; return r.n; },
+    bar(v,c){ return '<div style="flex:1 1 auto;height:5px;border-radius:3px;background:var(--card-border);overflow:hidden"><i style="display:block;height:100%;border-radius:3px;width:'+Math.max(0,Math.min(100,v||0))+'%;background:'+(c||'var(--accent)')+'"></i></div>'; },
+    find(tasks,id){ return tasks.filter(t=>t.id===id)[0]; },
+    /* ---- KPI（5 个数 + 总进度 + 成员负载） ---- */
+    kpi(tasks, bugs){
+      const live = tasks.filter(t=>t.status!=='done');
+      const done = tasks.filter(t=>t.status==='done').length;
+      const over = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length;
+      const today = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)===0).length;
+      const pct = tasks.length ? Math.round(done/tasks.length*100) : 0;
+      const it = (n,l,cls)=>'<span class="it'+(cls?' '+cls:'')+'"><b>'+n+'</b>'+l+'</span>';
+      let s = it(tasks.length,'任务') + '<i class="sep"></i>'
+        + it(tasks.filter(t=>t.status==='doing').length,'在做')
+        + it(tasks.filter(t=>t.status==='review').length,'待验收')
+        + it(today,'今天到期','warn')
+        + it(over,'逾期','hot')
+        + '<i class="sep"></i><span class="pw">'+this.bar(pct)+'<span class="pct">'+pct+'% 完成（'+done+'/'+tasks.length+'）</span></span>'
+        + '<i class="sep"></i><span class="lds">';
+      Object.keys(ROLE).forEach(id=>{
+        const mine = live.filter(t=>t.owner===id);
+        const o2 = mine.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length;
+        s += '<span class="ld'+(o2?' over':'')+'">'+this.av(id)+esc(ROLE[id].n)+' '+mine.length+(o2?' ⚠️'+o2:'')+'</span>';
+      });
+      return s + '</span>';
+    },
+    /* ---- 项目详情条（可展开；原来 resourcePanel 的内容整块搬进来） ---- */
+    proj(g, p, tasks){
+      if(!p) return '';
+      const ms = D.devAll('devMilestone', p.id) || [];
+      const done = tasks.filter(t=>t.status==='done').length;
+      const pct = tasks.length ? Math.round(done/tasks.length*100) : 0;
+      const live = tasks.filter(t=>t.status!=='done');
+      let sum = esc(p.name) + ' · ' + esc(p.engine || '未设置工具')
+        + ' · 负责人 ' + esc(this.ownerName(CONFIG.me))
+        + ' · 成员 ' + Object.keys(ROLE).length + ' 人'
+        + ' · 任务 ' + done + '/' + tasks.length;
+      if(p.targetDate) sum += ' · 目标 ' + esc(p.targetDate);
+      if(ms.length) sum += ' · 里程碑 ' + ms.length + ' 个';
+      let s = '<div class="tk-proj"><div class="tk-proj-hd" data-tk-proj>'
+        + '<b>📁 项目详情</b><span class="sum">'+sum+'</span>'
+        + '<span class="tri">'+(this.projOpen?'收起 ▴':'展开 ▾')+'</span></div>';
+      if(this.projOpen){
+        s += '<div class="tk-pgrid">'
+          + '<div class="tk-pf"><i>项目</i><b>'+esc(p.name)+'</b></div>'
+          + '<div class="tk-pf"><i>状态</i><b>'+esc(LABELS[p.status] || p.status || '—')+'</b></div>'
+          + '<div class="tk-pf"><i>工具</i><b>'+esc(p.engine || '—')+'</b></div>'
+          + '<div class="tk-pf"><i>目标日期</i><b>'+esc(p.targetDate || '—')+'</b></div>'
+          + '<div class="tk-pf"><i>负责人</i><b>'+this.av(CONFIG.me)+esc(this.ownerName(CONFIG.me))+'</b></div>'
+          + '<div class="tk-pf"><i>成员</i><b>'+Object.keys(ROLE).map(id=>'<span style="display:inline-flex;align-items:center;gap:4px">'+this.av(id)+esc(ROLE[id].n)+'</span>').join('')+'</b></div>'
+          + '<div class="tk-pf" style="grid-column:1/-1"><i>任务分布</i><b>'
+            + this.stOrder().map(s2=>this.stName(s2)+' '+tasks.filter(t=>t.status===s2).length).join(' · ')
+            + ' · 逾期 '+live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length
+            + ' · 完成率 '+pct+'%</b></div>';
+        if(p.description) s += '<div class="tk-pf" style="grid-column:1/-1"><i>项目说明</i><b style="font-weight:500">'+esc(p.description)+'</b></div>';
+        /* 原「项目资源区」整块搬进来（保持同一份数据与复制行为） */
+        const res = g.resourcePanel(p);
+        if(res) s += '<div style="grid-column:1/-1">'+res+'</div>';
+        s += '</div>';
+      }
+      return s + '</div>';
+    },
+    /* ---- 视图 1 · 泳道 ---- */
+    lane(tasks, all){
+      let s = '';
+      TB_AREAS.forEach(A=>{
+        const list = tasks.filter(t => (t.area || 'misc') === A[0]);
+        const doing = list.filter(t=>t.status==='doing'||t.status==='review').length;
+        const over = list.filter(t=>t.status!=='done' && t.dueDate && this.daysTo(t.dueDate)<0).length;
+        let worst = null;
+        this.stOrder().forEach(k=>{
+          const sub = list.filter(t=>t.status===k);
+          if(sub.length < 2) return;
+          const avg = Math.round(sub.reduce((a,t)=>a+(t.touch||0),0)/sub.length);
+          if(!worst || avg > worst.avg) worst = { k:k, avg:avg };
+        });
+        const min = !!this.laneMin[A[0]];
+        s += '<div class="tk-lane'+(min?' min':'')+'">'
+          + '<div class="tk-lane-hd" data-tk-lane="'+A[0]+'" style="border-left-color:'+A[2]+'">'
+          +   '<span>'+A[1]+'</span>'
+          +   '<span class="cnt">'+list.length+' 条 · 在做 '+doing+(over?' · <span style="color:#ef4444">'+over+' 逾期</span>':'')+'</span>'
+          +   '<span class="tk-minichips">'+this.stOrder().map(k=>{const n=list.filter(t=>t.status===k).length;return n?'<span>'+this.stName(k)+' '+n+'</span>':'';}).join('')+'</span>'
+          +   (worst?'<span class="hint">⚠️ 「'+this.stName(worst.k)+'」堆积最多 —— 卡点在这</span>':'')
+          +   '<span class="tri" style="margin-left:'+(worst?'8px':'auto')+'">'+(min?'展开 ▾':'收起 ▴')+'</span>'
+          + '</div><div class="tk-lane-bd">';
+        this.stOrder().forEach(k=>{
+          const sub = list.filter(t=>t.status===k);
+          s += '<div class="tk-cell"><div class="ct">'+this.stName(k)+' '+sub.length+'</div>';
+          sub.forEach(t=>{
+            const dep = t.dependsOn ? this.find(all, t.dependsOn) : null;
+            const blocked = dep && dep.status !== 'done';
+            s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+'" data-tk-open="'+esc(t.id)+'">'
+              + '<div style="display:flex;gap:5px;align-items:baseline"><span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span></div>'
+              + (dep?'<div class="tk-wait">⛓ 等「'+esc(dep.title)+'」'+(blocked?'（还没完成）':'（已解锁）')+'</div>':'')
+              + (t.stage||t.soft?'<div class="tk-meta">'+esc(t.stage||'')+(t.soft?' · '+esc(String(t.soft).split(/[,，;；\s]+/)[0]):'')+'</div>':'')
+              + '<div style="display:flex;align-items:center;gap:7px;margin-top:6px">'+this.av(t.owner)
+              +   '<span class="tk-dim" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(this.ownerName(t.owner))+'</span>'
+              +   '<span style="margin-left:auto">'+this.due(t)+'</span></div>'
+              + '</div>';
+          });
+          if(!sub.length) s += '<div class="tk-dim" style="font-size:11px;padding:3px 2px">—</div>';
+          s += '</div>';
+        });
+        s += '</div></div>';
+      });
+      const nb = tasks.filter(t=>{const d=t.dependsOn&&this.find(all,t.dependsOn);return d&&d.status!=='done'&&t.status!=='done';}).length;
+      return s + '<div style="font-size:11px;color:var(--muted);line-height:1.75">'
+        + '左缘红条 = 前置没完成，现在做也推不动（'+nb+' 条）。泳道头的橙字是「本泳道堆积最多的那一格」。点泳道头可折叠；点卡片看右侧详情，双击才编辑。</div>';
+    },
+    /* ---- 视图 2 · 总表 ---- */
+    sorted(list){
+      const k = this.sort.k, dir = this.sort.dir;
+      return list.slice().sort((a,b)=>{
+        let x = a[k], y = b[k];
+        if(k==='owner'){ x = this.ownerName(a.owner); y = this.ownerName(b.owner); }
+        if(k==='status'){ x = this.stOrder().indexOf(a.status); y = this.stOrder().indexOf(b.status); }
+        if(k==='priority'){ x = ['high','mid','low'].indexOf(a.priority); y = ['high','mid','low'].indexOf(b.priority); }
+        if(x==null) x=''; if(y==null) y='';
+        if(x<y) return -1*dir; if(x>y) return 1*dir; return 0;
+      });
+    },
+    th(k, label, extra){
+      const on = this.sort.k === k;
+      return '<th data-tk-sort="'+k+'"'+(extra||'')+'>'+label+(on?(this.sort.dir>0?' ▲':' ▼'):'')+'</th>';
+    },
+    table(list, all){
+      const cols = [['title','任务'],['status','状态'],['stage','阶段'],['owner','负责人'],['priority','优先级'],['dueDate','交期'],['dueDate','剩余'],['soft','主要软件']];
+      let s = '<div class="tk-tw"><table class="tk-tbl tk-den'+this.den+'"><thead><tr>'
+        + '<th class="nos frz" style="width:32px"></th>' + this.th('title','任务',' class="frz" style="width:240px"')
+        + this.th('status','状态') + '<th class="nos">阶段</th>' + this.th('owner','负责人')
+        + this.th('priority','优先级') + this.th('dueDate','交期') + '<th class="nos">剩余</th>' + '<th class="nos">主要软件</th>'
+        + '</tr></thead><tbody>';
+      this.stOrder().forEach(k=>{
+        const list2 = this.sorted(list.filter(t=>t.status===k));
+        const over = list2.filter(t=>k!=='done' && t.dueDate && this.daysTo(t.dueDate)<0).length;
+        const open = !this.grp['s_'+k];
+        s += '<tr class="grp" data-tk-grp="s_'+k+'"><td class="frz"></td><td colspan="8">'
+          + '<span class="tri">'+(open?'▾':'▸')+'</span> '
+          + '<span class="tk-st"><i class="d" style="background:'+TB_ST[k]+'"></i>'+this.stName(k)+'</span> '
+          + '<span class="gc">'+list2.length+' 条'+(over?' · <span style="color:#ef4444">'+over+' 逾期</span>':'')+'</span></td></tr>';
+        if(!list2.length) s += '<tr class="'+(open?'':'hide')+'"><td class="frz"></td><td colspan="8" class="tk-dim" style="font-size:11px;padding:9px">— 这一组是空的</td></tr>';
+        list2.forEach(t=>{
+          const dd = t.dueDate ? this.daysTo(t.dueDate) : null;
+          const over2 = t.status!=='done' && dd!==null && dd<0;
+          const soon = t.status!=='done' && dd!==null && dd>=0 && dd<=2;
+          const op = (k,vals,cur)=>'<td class="tk-ie"><select data-tk-ief="'+k+'" data-tk-id="'+esc(t.id)+'">'
+            + vals.map(v=>'<option value="'+esc(v[0])+'"'+(String(v[0])===String(cur==null?'':cur)?' selected':'')+'>'+esc(v[1])+'</option>').join('')+'</select></td>';
+          s += '<tr class="r'+(over2?' over':'')+(soon?' soon':'')+(open?'':' hide')+(this.rsel===t.id?' sel':'')+'" data-tk-open="'+esc(t.id)+'">'
+            + '<td class="frz"><input type="checkbox" class="tk-chk" data-tk-sel="'+esc(t.id)+'"'+(this.sel.has(t.id)?' checked':'')+'></td>'
+            + '<td class="tt frz"><span class="tk-pri '+this.pri(t)+'" style="margin-right:6px">'+this.pri(t)+'</span>'+esc(t.title)+'</td>'
+            + op('status', this.stOrder().map(x=>[x,this.stName(x)]), t.status)
+            + '<td class="num">'+esc(t.stage || '—')+'</td>'
+            + op('owner', Object.keys(ROLE).map(x=>[x,ROLE[x].n]), t.owner)
+            + op('priority', [['high','P1'],['mid','P2'],['low','P3']], t.priority)
+            + '<td class="tk-ie"><input type="date" data-tk-ief="dueDate" data-tk-id="'+esc(t.id)+'" value="'+esc(t.dueDate||'')+'"></td>'
+            + '<td style="white-space:nowrap">'+this.due(t)+'<span class="tk-saved" data-tk-saved="'+esc(t.id)+'">已存 ✓</span></td>'
+            + '<td class="num">'+esc(String(t.soft||'').split(/[,，;；\s]+/).filter(Boolean)[0] || '—')+'</td></tr>';
+        });
+      });
+      s += '</tbody></table></div>';
+      s += '<div class="tk-bat'+(this.sel.size?' live':'')+'">'
+        + '<span>已选 <b>'+this.sel.size+'</b> 条</span>'
+        + '<select data-tk-batf'+(this.sel.size?'':' disabled')+'><option value="">改状态…</option>'+this.stOrder().map(k=>'<option value="'+k+'">'+this.stName(k)+'</option>').join('')+'</select>'
+        + '<select data-tk-batm'+(this.sel.size?'':' disabled')+'><option value="">换负责人…</option>'+Object.keys(ROLE).map(k=>'<option value="'+k+'">'+ROLE[k].n+'</option>').join('')+'</select>'
+        + '<input type="date" data-tk-batd'+(this.sel.size?'':' disabled')+'>'
+        + '<button class="tk-btn" data-tk-batgo'+(this.sel.size?'':' disabled')+'>应用到选中</button>'
+        + '<button class="tk-btn" data-tk-batdel'+(this.sel.size?'':' disabled')+'>删除</button>'
+        + '<span class="tk-dim" style="font-size:11px;margin-left:auto">状态 / 负责人 / 优先级 / 交期 直接在格子里改；任务名列冻结在左</span></div>';
+      return s;
+    },
+    /* ---- 视图 3 · 时间 ---- */
+    time(list){
+      const rows = this.sorted(list.filter(t=>t.status!=='done'));
+      const days = [];
+      for(let i=-2;i<12;i++){ const d = new Date(D.today()+'T00:00:00'); d.setDate(d.getDate()+i); days.push((d.getMonth()+1)+'/'+d.getDate()); }
+      const tp = 2/14*100;
+      let s = '<table class="tk-gt"><thead><tr><th style="width:240px">任务</th><th style="width:88px">状态</th><th style="width:54px">负责人</th><th style="width:76px">剩余</th>'
+        + '<th>交付节奏（最左 2 格 = 已逾期区）<div class="tk-gaxis">'+days.map((x,ix)=>'<span'+(ix===2?' style="color:var(--accent);font-weight:800"':'')+'>'+x+'</span>').join('')+'</div></th></tr></thead><tbody>';
+      rows.forEach(t=>{
+        const dd = t.dueDate ? this.daysTo(t.dueDate) : 0;
+        const over = dd < 0;
+        const left = over ? Math.max(0,(dd+2)/14*100) : tp;
+        const w = over ? Math.max(3, tp-left) : Math.min(100-tp, dd/14*100);
+        s += '<tr data-tk-open="'+esc(t.id)+'">'
+          + '<td class="n"><span class="tk-pri '+this.pri(t)+'" style="margin-right:6px">'+this.pri(t)+'</span>'+esc(t.title)+'</td>'
+          + '<td class="n"><span class="tk-st"><i class="d" style="background:'+TB_ST[t.status]+'"></i>'+this.stName(t.status)+'</span></td>'
+          + '<td class="n">'+this.av(t.owner)+'</td>'
+          + '<td class="n tk-dim" style="font-size:11px">'+(t.dueDate?this.due(t):'未排')+'</td>'
+          + '<td><div class="tk-track"><div class="gb2'+(over?' over':'')+'" style="left:'+left+'%;width:'+Math.max(w,2)+'%;background:'+(over?'#ef4444':TB_ST[t.status])+'"></div><div class="tv" style="left:'+tp+'%"></div></div></td></tr>';
+      });
+      s += '</tbody></table>';
+      if(!rows.length) s += '<div class="tk-emptyst">没有未完成的任务</div>';
+      return s + '<div style="font-size:11px;color:var(--muted);margin-top:8px">已完成的不占位置。蓝线 = 今天，条往左溢出成红 = 已经逾期。</div>';
+    },
+    /* ---- 右栏 ---- */
+    rail(g, list, all){
+      if(this.rmode === 'task'){
+        const t = this.find(all, this.rsel) || list[0];
+        if(!t) return '<h3>✎ 任务详情</h3><div class="tk-emptyst">没有任务</div>';
+        const ds = DISCUSS[t.id] || [];
+        const st = this.stOrder(), nx = st[Math.min(st.length-1, st.indexOf(t.status)+1)];
+        const dep = t.dependsOn ? this.find(all, t.dependsOn) : null;
+        const ms = t.milestoneId ? (D.devAll('devMilestone')||[]).filter(m=>m.id===t.milestoneId)[0] : null;
+        let s = '<h3>✎ 任务详情 <span class="bx" data-tk-rail="today">← 返回今日</span></h3><div class="tk-det">'
+          + '<h4>'+esc(t.title)+'</h4>'
+          + '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:5px">'
+          +   '<span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span>'
+          +   '<span class="tk-st"><i class="d" style="background:'+TB_ST[t.status]+'"></i>'+this.stName(t.status)+'</span>'+this.due(t)+'</div>'
+          + '<div class="kv">'
+          +   '<i>负责人</i><span style="display:flex;align-items:center;gap:6px">'+this.av(t.owner)+esc(this.ownerName(t.owner))+'</span>'
+          +   '<i>阶段</i><span>'+esc(t.stage || '未分区')+'</span>'
+          +   '<i>主要软件</i><span>'+esc(t.soft || '—')+'</span>'
+          +   '<i>交付日</i><span>'+esc(t.dueDate || '未排期')+'</span>'
+          +   (ms?'<i>里程碑</i><span>'+esc(ms.title)+'</span>':'')
+          +   (dep?'<i>前置</i><span style="color:'+(dep.status==='done'?'#10b981':'#f5a524')+'">'+esc(dep.title)+'（'+(dep.status==='done'?'已完成':'未完成')+'）</span>':'')
+          +   (t.path?'<i>UE 路径</i><span style="word-break:break-all"><code>'+esc(t.path)+'</code></span>':'')
+          + '</div>';
+        /* 所属项目 */
+        const p = g.project();
+        if(p){
+          const ptasks = D.devAll('devTask', p.id) || [];
+          const pdone = ptasks.filter(x=>x.status==='done').length;
+          const pms = (D.devAll('devMilestone', p.id)||[]);
+          s += '<div class="tk-rsec">所属项目</div><div class="tk-projmini">'
+            + '<div class="pn">'+esc(p.name)+'<span style="font-size:10px;padding:0 5px;border-radius:4px;border:1px solid var(--card-border);color:var(--muted)">'+esc(p.engine||'—')+'</span></div>'
+            + '<div class="pm">状态 '+esc(LABELS[p.status]||p.status||'—')+(p.targetDate?' · 目标 '+esc(p.targetDate):'')+'</div>'
+            + '<div class="pm">负责人 '+esc(this.ownerName(CONFIG.me))+' · 成员 '+Object.keys(ROLE).map(k=>esc(ROLE[k].n)).join(' / ')+'</div>'
+            + '<div class="pm">任务 '+pdone+'/'+ptasks.length+' 完成'+(pms.length?' · 里程碑 '+pms.length+' 个':'')+'</div>'
+            + '</div>';
+        }
+        s += '<div class="tk-rsec">讨论 '+ds.length+'</div>';
+        s += ds.length ? ds.map(m=>'<div class="tk-msg">'+this.av(m.u)+'<div class="b"><div style="font-size:10.5px;color:var(--muted);margin-bottom:2px">'+esc(this.ownerName(m.u))+' · '+esc(fmtT(m.t))+'</div>'+esc(m.x)+'</div></div>').join('')
+          : '<div class="tk-emptyst">还没有讨论</div>';
+        s += '<div class="tk-rbtns"><button class="tk-btn" data-tk-adv="'+esc(t.id)+'">推进到 '+this.stName(nx)+'</button>'
+          + '<button class="tk-btn" data-tk-disc="'+esc(t.id)+'">讨论</button></div>'
+          + '<div class="tk-rbtns"><button class="tk-btn pri" style="width:100%" data-tk-edit="'+esc(t.id)+'">完整编辑</button></div>';
+        return s + '</div>';
+      }
+      /* 今日 */
+      const live = list.filter(t=>t.status!=='done');
+      const over = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).sort((a,b)=>this.daysTo(a.dueDate)-this.daysTo(b.dueDate));
+      const td = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)===0);
+      const soon = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)>0 && this.daysTo(t.dueDate)<=2).sort((a,b)=>this.daysTo(a.dueDate)-this.daysTo(b.dueDate));
+      const blocked = live.filter(t=>{const d=t.dependsOn&&this.find(all,t.dependsOn);return d&&d.status!=='done';});
+      const sec = (title, arr, cls) => !arr.length ? '' : '<div class="tk-rsec">'+title+' · '+arr.length+'</div>'
+        + arr.map(t=>'<div class="tk-rrow '+(cls||'')+'" data-tk-open="'+esc(t.id)+'">'+this.av(t.owner)+'<span class="t">'+esc(t.title)+'</span>'+this.due(t)+'</div>').join('');
+      let s = '<h3>📌 今天</h3>';
+      s += sec('逾期', over, 'over') + sec('今天到期', td, 'today') + sec('2 天内', soon, '');
+      if(!over.length && !td.length && !soon.length) s += '<div class="tk-emptyst">今天没有到期，也没有逾期 🎉</div>';
+      if(blocked.length) s += '<div class="tk-rsec">被前置挡住 · '+blocked.length+'</div>'
+        + blocked.map(t=>'<div class="tk-rrow" data-tk-open="'+esc(t.id)+'"><span style="color:#f5a524;font-size:10px">⛓</span><span class="t">'+esc(t.title)+'</span>'+this.av(t.owner)+'</div>').join('');
+      s += '<div class="tk-rsec">怎么用</div><div style="font-size:11px;color:var(--muted);line-height:1.75">'
+        + '单击卡片 → 这栏切「任务详情」；<b>双击</b> → 打开编辑弹窗（Esc / 点空白都能关，改过会先问一次）。</div>';
+      return s;
+    },
+    /* ---- 主渲染 ---- */
+    html(g, tasks, all, p){
+      if(this.view === 'table'){
+        return this.toolbar(g) + '<div class="tk-wrap'+(this.rail?'':' norail')+'"><div class="tk-main">'+this.table(tasks, all)+'</div>'
+          + (this.rail?'<aside class="tk-rail">'+this.rail(g, tasks, all)+'</aside>':'')+'</div>';
+      }
+      if(this.view === 'time'){
+        return this.toolbar(g) + '<div class="tk-wrap'+(this.rail?'':' norail')+'"><div class="tk-main">'+this.time(tasks)+'</div>'
+          + (this.rail?'<aside class="tk-rail">'+this.rail(g, tasks, all)+'</aside>':'')+'</div>';
+      }
+      return this.toolbar(g) + '<div class="tk-wrap'+(this.rail?'':' norail')+'"><div class="tk-main">'+this.lane(tasks, all)+'</div>'
+        + (this.rail?'<aside class="tk-rail">'+this.rail(g, tasks, all)+'</aside>':'')+'</div>';
+    },
+    toolbar(g){
+      const V = [['lane','▦','泳道'],['table','☷','总表'],['time','◷','时间']];
+      return '<div class="tk-bar">'
+        + '<div class="tk-seg">'+V.map(v=>'<button type="button" data-tk-view="'+v[0]+'"'+(this.view===v[0]?' class="on"':'')+'><span>'+v[1]+'</span>'+v[2]+'</button>').join('')+'</div>'
+        + '<span class="tk-srch">'+I.get('search')+'<input data-tk-kw placeholder="搜任务…" value="'+esc(this.kw)+'"></span>'
+        + '<button type="button" class="tk-btn'+(this.den==='2'?' on':'')+'" data-tk-den title="表格行高">▤ '+(this.den==='2'?'宽松':'紧凑')+'</button>'
+        + '<button type="button" class="tk-btn'+(this.rail?' on':'')+'" data-tk-railbtn title="右侧栏">▥ 右栏</button>'
+        + '<select class="input" data-tk-member aria-label="筛选成员" style="width:auto">'+optionList(Object.entries(ROLE).map(([id,r])=>[id,r.n]),g._member,'全部成员')+'</select>'
+        + '<button type="button" class="tk-btn pri" style="margin-left:auto" data-tk-new>'+I.get('plus')+'新建任务</button>'
+        + '</div>';
+    },
+    /* ---- 事件 ---- */
+    bind(box, g, App){
+      const self = this;
+      box.addEventListener('click', function(e){
+        const el = e.target;
+        const v = el.closest('[data-tk-view]');
+        if(v){ self.view = v.dataset.tkView; g.repaint(); return; }
+        if(el.closest('[data-tk-proj]')){ self.projOpen = !self.projOpen; g.repaint(); return; }
+        if(el.closest('[data-tk-den]')){ self.den = self.den==='1'?'2':'1'; g.repaint(); return; }
+        if(el.closest('[data-tk-railbtn]')){ self.rail = !self.rail; g.repaint(); return; }
+        if(el.closest('[data-tk-rail]')){ self.rmode = el.closest('[data-tk-rail]').dataset.tkRail; g.repaint(); return; }
+        const lane = el.closest('[data-tk-lane]');
+        if(lane){ self.laneMin[lane.dataset.tkLane] = !self.laneMin[lane.dataset.tkLane]; g.repaint(); return; }
+        const grp = el.closest('[data-tk-grp]');
+        if(grp){ self.grp[grp.dataset.tkGrp] = !self.grp[grp.dataset.tkGrp]; g.repaint(); return; }
+        const sort = el.closest('[data-tk-sort]');
+        if(sort){ const k = sort.dataset.tkSort; self.sort.dir = (self.sort.k===k) ? -self.sort.dir : 1; self.sort.k = k; g.repaint(); return; }
+        if(el.closest('[data-tk-new]')){ g.openEditor('devTask'); return; }
+        const ed = el.closest('[data-tk-edit]');
+        if(ed){ g.openEditor('devTask', ed.dataset.tkEdit); return; }
+        const adv = el.closest('[data-tk-adv]');
+        if(adv){
+          const t = D.devAll('devTask').filter(x=>x.id===adv.dataset.tkAdv)[0];
+          if(t){ const st = self.stOrder(); try{ D.devSave('devTask',{status:st[Math.min(st.length-1, st.indexOf(t.status)+1)]}, t.id); g.repaint(); App.toast('状态已更新'); }catch(err){ App.toast(err.message,7000); } }
+          return;
+        }
+        const dis = el.closest('[data-tk-disc]');
+        if(dis){ openDevDiscussion('devTask', dis.dataset.tkDisc); return; }
+        /* 批量 */
+        if(el.closest('[data-tk-batgo]')){
+          const f = box.querySelector('[data-tk-batf]'), m = box.querySelector('[data-tk-batm]'), d = box.querySelector('[data-tk-batd]');
+          let n = 0;
+          D.devAll('devTask').forEach(t=>{
+            if(!self.sel.has(t.id)) return;
+            const patch = {};
+            if(f && f.value){ patch.status = f.value; n++; }
+            if(m && m.value){ patch.owner = m.value; n++; }
+            if(d && d.value){ patch.dueDate = d.value; n++; }
+            if(Object.keys(patch).length){ try{ D.devSave('devTask', patch, t.id); }catch(err){} }
+          });
+          self.sel.clear(); g.repaint();
+          App.toast(n ? ('已应用 '+n+' 处改动') : '先在下拉里选一个要改的值', n ? '' : 7000);
+          return;
+        }
+        if(el.closest('[data-tk-batdel]')){
+          const dels = D.devAll('devTask').filter(t=>self.sel.has(t.id));
+          if(!dels.length) return;
+          dels.forEach(t=>{ try{ D.devRemove('devTask', t.id); }catch(err){} });
+          self.sel.clear(); g.repaint();
+          App.toast('已删除 '+dels.length+' 条（可在开发记录回收站恢复）', 7000);
+          return;
+        }
+        if(el.closest('input,select,textarea')) return;
+        const op = el.closest('[data-tk-open]');
+        if(op){ self.rsel = op.dataset.tkOpen; self.rmode = 'task'; g.repaint(); return; }
+      }, true);
+      box.addEventListener('dblclick', function(e){
+        const op = e.target.closest('[data-tk-open]');
+        if(op){ e.preventDefault(); g.openEditor('devTask', op.dataset.tkOpen); }
+      });
+      box.addEventListener('change', function(e){
+        const el = e.target;
+        const ck = el.closest('[data-tk-sel]');
+        if(ck){
+          const id = ck.dataset.tkSel;
+          if(ck.checked) self.sel.add(id); else self.sel.delete(id);
+          const bat = box.querySelector('.tk-bat');
+          if(bat){
+            bat.querySelector('b').textContent = self.sel.size;
+            bat.classList.toggle('live', self.sel.size > 0);
+            bat.querySelectorAll('select,input,button').forEach(x=>{ x.disabled = self.sel.size === 0; });
+          }
+          return;
+        }
+        const ie = el.closest('[data-tk-ief]');
+        if(ie){
+          const id = ie.dataset.tkId, f = ie.dataset.tkIef;
+          const patch = {}; patch[f] = ie.value;
+          try{ D.devSave('devTask', patch, id); }catch(err){ App.toast(err.message,7000); return; }
+          const sv = box.querySelector('[data-tk-saved="'+id+'"]');
+          if(sv){ sv.classList.add('on'); setTimeout(()=>{ sv.classList.remove('on'); }, 1400); }
+          if(f === 'status' || f === 'owner') setTimeout(()=>g.repaint(), 900);
+          return;
+        }
+        const mem = el.closest('[data-tk-member]');
+        if(mem){ g._member = mem.value; g.repaint(); return; }
+      });
+      let tm = null;
+      box.addEventListener('input', function(e){
+        if(!e.target.matches('[data-tk-kw]')) return;
+        const v = e.target.value.trim();
+        clearTimeout(tm);
+        tm = setTimeout(()=>{ self.kw = v; g.repaint(); }, 220);
+      });
+    },
+    /* 键盘（由 onKeydown 转发） */
+    key(e){
+      if(e.key === '1'){ this.view='lane'; return true; }
+      if(e.key === '2'){ this.view='table'; return true; }
+      if(e.key === '3'){ this.view='time'; return true; }
+      if(e.key === 't'){ this.rail = !this.rail; return true; }
+      if(e.key === 'j' || e.key === 'k'){
+        const ids = D.devAll('devTask').map(t=>t.id);
+        let i = ids.indexOf(this.rsel);
+        i = (i < 0 ? 0 : i) + (e.key==='j' ? 1 : -1);
+        i = Math.max(0, Math.min(ids.length-1, i));
+        this.rsel = ids[i] || ''; this.rmode = 'task';
+        return true;
+      }
+      return false;
+    },
+    reset(){ this.view='lane'; this.rail=true; this.rmode='today'; this.rsel=''; this.den='1'; this.projOpen=false;
+      this.grp={}; this.laneMin={}; this.sel=new Set(); this.sort={k:'dueDate',dir:1}; this.kw=''; }
+  };
+
 const GameDev = {
   key:'gamedev',title:'游戏开发',icon:'gamepad',_tab:'devMilestone',_project:'',_query:'',_filter:'',_area:'',_stage:'',_soft:'',_box:null,_clock:null,_member:'',
   repaint(){render();return Promise.resolve();},
@@ -507,7 +931,8 @@ const GameDev = {
       + '</div>';
     const picker='';
     const kpiItems=[['任务总数',tasks.length],['进行中',tasks.filter(r=>r.status==='doing').length],['待验收',tasks.filter(r=>r.status==='review').length],['待开发',tasks.filter(r=>r.status==='backlog').length],['未关闭 BUG',bugs.filter(r=>r.status!=='closed').length],['近 7 天工时',hours(summary.minutes)],['资产就绪',assets.filter(r=>assetProgress(r).percent===100).length+' / '+assets.length]];
-    const kpibar='<div class="gd-kpibar">'+kpiItems.map(function(k){return '<span><b>'+esc(String(k[1]))+'</b>'+esc(k[0])+'</span>';}).join('<i class="gd-kpibar-sep">·</i>')+'</div>';
+    const kpibar='<div class="tk-kpibar">'+TBoard.kpi(tasks,bugs)+'</div>';
+    const tkProj=TBoard.proj(this,p,tasks);
     const info=p?'<section class="gd-project-card">'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+this.resourcePanel(p)+'</section>':'';
     const tabs='<div class="gd-tabs" role="tablist" aria-label="开发功能">'+TABS.map(function(t){return '<button role="tab" tabindex="'+(tab===t[0]?'0':'-1')+'" aria-selected="'+(tab===t[0])+'" class="gd-tab'+(tab===t[0]?' on':'')+'" data-gd-tab="'+t[0]+'">'+I.get(t[2])+'<span>'+t[1]+'</span><small>'+all(t[0]).length+'</small></button>';}).join('')+'</div>';
     if(!p)return title+picker+tabs+'<div class="gd-empty gd-welcome"><span class="gd-empty-icon">'+I.get('gamepad')+'</span><h3>先给你的作品建一个项目</h3><p>填写名称和目标，就能开始拆分里程碑、安排任务和记录开发。</p><button class="btn btn-primary" data-gd-new-project>创建第一个项目</button></div>';
@@ -515,12 +940,13 @@ const GameDev = {
     const rows=all(tab).filter(r=>this.matches(r));
     let body='';
     if(tab==='devMilestone')body=this.milestones(rows,tasks);
-    if(tab==='devTask')body=this.tasks(rows,tasks,all('devMilestone'));
+    if(tab==='devTask')body=TBoard.html(this, TBoard.stack(tasks,id,this._member), tasks, p);
     if(tab==='devBug')body=this.bugs(rows);
     if(tab==='devLog')body=this.logs(rows);
     if(tab==='devTime')body=this.times(rows,id);
     if(tab==='devAsset')body=this.assets(rows);
-    return title+picker+info+kpibar+timerNotice+tabs+this.filterBar(tab,tasks)+toolbar+'<section class="gd-content" role="tabpanel" aria-label="'+TABS.find(t=>t[0]===tab)[1]+'">'+body+'</section>';
+    const isTB=(tab==='devTask');
+    return title+picker+(isTB?tkProj:info)+kpibar+timerNotice+tabs+(isTB?'':this.filterBar(tab,tasks))+(isTB?'':toolbar)+'<section class="gd-content" role="tabpanel" aria-label="'+TABS.find(t=>t[0]===tab)[1]+'">'+body+'</section>';
   },
   filterBar:function(tab,tasks) {
     if(tab!=='devTask')return '';
@@ -772,9 +1198,10 @@ const GameDev = {
       const img=e.target.closest('[data-gd-image]');
       if(img){const r=D.devAll('devBug').find(r=>r.id===img.dataset.gdImage);if(r&&r.images[+img.dataset.index])App.openModal({title:r.title,width:900,html:thumb(r.images[+img.dataset.index],'BUG 截图').replace('<img ','<img class="gd-image-full" ')});}
     });
+    TBoard.bind(box, this, App);
   },
   chooseTab:function(key) {
-    this._tab=key;this.resetFilters();
+    this._tab=key;this.resetFilters();TBoard.kw='';
     this.repaint().then(()=>{const tab=this._box.querySelector('[role=tab][data-gd-tab="'+key+'"]');if(tab)tab.focus({preventScroll:true});});
   },
   resetFilters:function() {
@@ -1640,6 +2067,154 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .modal.genericModal .gd-field textarea{min-height:220px}
   @media(hover:hover) and (pointer:fine){.gd-card:hover,.gd-task:hover{transform:translateY(-2px);border-color:var(--accent)}}
   @media(max-width:700px){.gd-root{padding:12px}.gd-heading{flex-wrap:wrap}.modal .mbox{width:calc(100vw - 16px)}.drawer{width:calc(100vw - 12px);max-width:440px}.cols{grid-template-columns:1fr!important}.gd-toolbar>select{max-width:none}.gb,.btn{min-height:36px}.top .brand small{display:block}}
+  /* ============================================================
+     v2.5 任务看板重设计（对齐「合成版」预览：三视图 + 右栏 + 项目详情条）
+     配色全部走 .t-root 主题令牌，所以 6 套主题自动跟随
+     ============================================================ */
+  .tk-wrap{display:grid;grid-template-columns:minmax(0,1fr) 262px;gap:12px;align-items:start;padding:11px 13px 13px}
+  .tk-wrap.norail{grid-template-columns:minmax(0,1fr)}
+  .tk-main{min-width:0}
+  .tk-kpibar{display:flex;align-items:center;gap:13px;flex-wrap:wrap;padding:9px 13px;background:var(--card-bg);border-bottom:1px solid var(--card-border)}
+  .tk-kpibar .it{display:flex;align-items:baseline;gap:5px;font-size:11.5px;color:var(--muted)}
+  .tk-kpibar .it b{font-size:16px;font-weight:750;color:var(--text);font-variant-numeric:tabular-nums}
+  .tk-kpibar .it.hot b{color:#ef4444}
+  .tk-kpibar .it.warn b{color:#f5a524}
+  .tk-kpibar .sep{width:1px;height:16px;background:var(--card-border)}
+  .tk-kpibar .pw{flex:1 1 150px;min-width:110px;display:flex;align-items:center;gap:8px}
+  .tk-kpibar .pw .pct{font-size:11px;color:var(--muted);white-space:nowrap}
+  .tk-kpibar .lds{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .tk-kpibar .lds .ld{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted);white-space:nowrap}
+  .tk-kpibar .lds .ld.over{color:#ef4444;font-weight:700}
+  .tk-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 13px 0}
+  .tk-seg{display:flex;gap:2px;background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:9px;padding:2px}
+  .tk-seg button{border:none;background:none;color:var(--muted);font:inherit;font-size:12.5px;padding:4px 12px;border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:5px;font-family:inherit}
+  .tk-seg button:hover{color:var(--text)}
+  .tk-seg button.on{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-weight:650}
+  .tk-btn{padding:4px 10px;border-radius:8px;border:1px solid var(--card-border);background:var(--card-bg);color:var(--text);cursor:pointer;font-size:11.5px;font-family:inherit;line-height:1.4;display:inline-flex;align-items:center;gap:5px}
+  .tk-btn:hover{border-color:var(--accent)}
+  .tk-btn.on{border-color:var(--accent);color:var(--accent)}
+  .tk-btn.pri{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff;font-weight:650}
+  .tk-btn[disabled]{opacity:.45;cursor:not-allowed}
+  .tk-srch{display:flex;align-items:center;gap:6px;background:var(--card-bg);border:1px solid var(--card-border);border-radius:8px;padding:3px 9px}
+  .tk-srch input{border:none;background:none;color:var(--text);font:inherit;font-size:12px;outline:none;width:120px}
+  /* 项目详情条 */
+  .tk-proj{margin:0;background:var(--card-bg);border-bottom:1px solid var(--card-border)}
+  .tk-proj-hd{display:flex;align-items:center;gap:9px;padding:8px 13px;font-size:12.5px;flex-wrap:wrap;cursor:pointer}
+  .tk-proj-hd .sum{color:var(--muted);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto;min-width:0}
+  .tk-proj-hd .tri{color:var(--muted);font-size:11px;white-space:nowrap}
+  .tk-pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;padding:0 13px 11px}
+  .tk-pf{background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:9px;padding:7px 10px}
+  .tk-pf i{display:block;font-style:normal;font-size:10px;color:var(--muted);margin-bottom:3px}
+  .tk-pf b{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .tk-plink{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;border:1px solid var(--card-border);border-radius:7px;padding:2px 8px;cursor:pointer;background:var(--card-bg);color:var(--text);font-family:inherit}
+  .tk-plink:hover{border-color:var(--accent);color:var(--accent)}
+  /* 卡片/零件 */
+  .tk-card{background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:10px;padding:8px 10px;transition:.14s;cursor:pointer;position:relative}
+  .tk-card:hover{border-color:var(--accent)}
+  .tk-card.sel{outline:2px solid var(--accent);outline-offset:1px}
+  .tk-card.blocked{border-color:#ef444470;background:color-mix(in srgb,#ef4444 8%,var(--card-bg-2))}
+  .tk-card.blocked:before{content:'';position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:2px;background:#ef4444}
+  .tk-pri{font-size:9.5px;font-weight:800;padding:1px 5px;border-radius:4px;flex:0 0 auto;background:var(--card-border);color:var(--muted)}
+  .tk-pri.P1{background:#f5a524;color:#1b1200}
+  .tk-pri.P2{background:var(--card-border);color:var(--muted)}
+  .tk-pri.P3{background:transparent;color:var(--muted);border:1px solid var(--card-border)}
+  .tk-av{width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;flex:0 0 auto}
+  .tk-st{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);white-space:nowrap}
+  .tk-st .d{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .tk-due{font-size:10.5px;font-weight:700;white-space:nowrap}
+  .tk-due.over{color:#ef4444}.tk-due.soon{color:#f5a524}.tk-due.ok{color:var(--muted)}.tk-due.done{color:#10b981}
+  .tk-mut{color:var(--muted)}.tk-dim{color:var(--muted);opacity:.75}
+  .tk-emptyst{color:var(--muted);font-size:12px;padding:12px;text-align:center;border:1px dashed var(--card-border);border-radius:9px}
+  /* 视图 1 · 泳道 */
+  .tk-lane{border:1px solid var(--card-border);border-radius:12px;overflow:hidden;margin-bottom:10px}
+  .tk-lane-hd{display:flex;align-items:center;gap:9px;padding:7px 12px;font-size:12.5px;font-weight:700;background:var(--card-bg-2);border-left:4px solid var(--accent);cursor:pointer;flex-wrap:wrap}
+  .tk-lane-hd .cnt{font-size:11px;color:var(--muted);font-weight:500}
+  .tk-lane-hd .hint{font-size:11px;color:#f5a524;font-weight:500;margin-left:auto}
+  .tk-lane-hd .tri{color:var(--muted);font-size:11px;font-weight:400}
+  .tk-lane.min .tk-lane-bd{display:none}
+  .tk-lane.min .tk-lane-hd .hint{display:none}
+  .tk-minichips{display:none;gap:5px;align-items:center;margin-left:8px}
+  .tk-lane.min .tk-minichips{display:flex}
+  .tk-minichips span{font-size:10.5px;padding:0 6px;border-radius:4px;border:1px solid var(--card-border);color:var(--muted)}
+  .tk-lane-bd{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:9px}
+  .tk-cell{min-height:54px;border-radius:8px;background:var(--card-bg-2);border:1px solid var(--card-border);padding:6px;display:flex;flex-direction:column;gap:6px}
+  .tk-cell .ct{font-size:10px;color:var(--muted);font-weight:700;letter-spacing:.04em;display:flex;align-items:center;gap:5px;opacity:.85}
+  .tk-cell .ct .hot{margin-left:auto;color:#f5a524;font-weight:600;opacity:1}
+  .tk-card .tt{font-size:12px;font-weight:600;line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .tk-wait{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#f5a524;border:1px dashed #f5a52455;border-radius:5px;padding:0 5px;margin-top:4px}
+  .tk-meta{font-size:10.5px;color:var(--muted);opacity:.85;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 视图 2 · 总表 */
+  .tk-tw{overflow:auto;border:1px solid var(--card-border);border-radius:11px;max-height:calc(100vh - 300px)}
+  .tk-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  .tk-tbl th{position:sticky;top:0;z-index:3;background:var(--card-bg-2);text-align:left;font-size:10.5px;color:var(--muted);font-weight:700;padding:7px 9px;border-bottom:1px solid var(--card-border);cursor:pointer;white-space:nowrap;user-select:none}
+  .tk-tbl th:hover{color:var(--accent)}
+  .tk-tbl th.nos{cursor:default}.tk-tbl th.nos:hover{color:var(--muted)}
+  .tk-tbl td{padding:6px 9px;border-bottom:1px solid var(--card-border);vertical-align:middle}
+  .tk-tbl tr.r:hover td{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+  .tk-tbl tr.r{cursor:pointer}
+  .tk-tbl tr.r.sel td{background:color-mix(in srgb,var(--accent) 15%,transparent)}
+  .tk-tbl .tt{font-weight:600;max-width:270px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-tbl .num{color:var(--muted);font-variant-numeric:tabular-nums}
+  .tk-tbl tr.hide{display:none}
+  .tk-tbl td.frz,.tk-tbl th.frz{position:sticky;left:0;background:var(--card-bg);z-index:2;box-shadow:1px 0 0 var(--card-border)}
+  .tk-tbl th.frz{z-index:4;background:var(--card-bg-2)}
+  .tk-tbl tr.r.over td.frz{box-shadow:inset 3px 0 0 #ef4444,1px 0 0 var(--card-border)}
+  .tk-tbl tr.r.soon td.frz{box-shadow:inset 3px 0 0 #f5a524,1px 0 0 var(--card-border)}
+  .tk-tbl tr.grp td{background:var(--card-bg-2);font-weight:700;font-size:12px;cursor:pointer;border-bottom:1px solid var(--card-border)}
+  .tk-tbl tr.grp .gc{color:var(--muted);font-weight:500}
+  .tk-ie select,.tk-ie input{border:1px solid transparent;background:transparent;color:inherit;font:inherit;font-size:12.5px;padding:2px 4px;border-radius:5px;outline:none;cursor:pointer;width:100%;min-width:0;font-family:inherit}
+  .tk-ie select:hover,.tk-ie input:hover{border-color:var(--card-border)}
+  .tk-ie select:focus,.tk-ie input:focus{border-color:var(--accent);background:var(--card-bg-2);cursor:text}
+  .tk-saved{font-size:10px;color:#10b981;margin-left:5px;opacity:0;transition:.3s}
+  .tk-saved.on{opacity:1}
+  .tk-den1 td{padding:3px 9px!important;font-size:11.5px}
+  .tk-den2 td{padding:10px 9px!important}
+  .tk-chk{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+  .tk-bat{position:sticky;bottom:0;margin-top:9px;display:flex;align-items:center;gap:8px;padding:8px 11px;border-radius:10px;background:var(--card-bg-2);border:1px solid var(--card-border);flex-wrap:wrap;transition:.18s}
+  .tk-bat.live{border-color:var(--accent)}
+  .tk-bat b{color:var(--accent);font-size:15px}
+  .tk-bat select,.tk-bat input{background:var(--card-bg);border:1px solid var(--card-border);color:var(--text);border-radius:7px;padding:3px 7px;font:inherit;font-size:11.5px;outline:none;font-family:inherit;width:auto!important;max-width:190px;flex:0 0 auto}
+  /* 视图 3 · 时间 */
+  .tk-gt{width:100%;border-collapse:collapse;font-size:12.5px}
+  .tk-gt th{position:sticky;top:0;z-index:3;background:var(--card-bg-2);text-align:left;font-size:10.5px;color:var(--muted);padding:7px 9px;border-bottom:1px solid var(--card-border);white-space:nowrap}
+  .tk-gt td{border-bottom:1px solid var(--card-border);vertical-align:middle;padding:0}
+  .tk-gt td.n{padding:7px 9px;cursor:pointer}
+  .tk-gt td.n:hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+  .tk-track{position:relative;height:42px;background:repeating-linear-gradient(90deg,transparent 0 calc(100%/14 - 1px),var(--card-border) calc(100%/14 - 1px) calc(100%/14))}
+  .tk-track .gb2{position:absolute;top:13px;height:16px;border-radius:5px;min-width:10px}
+  .tk-track .gb2.over{background:#ef4444!important}
+  .tk-track .tv{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);z-index:2}
+  .tk-track .tv:after{content:'今天';position:absolute;top:-1px;left:3px;font-size:9px;color:var(--accent);font-weight:700}
+  .tk-gaxis{display:flex;margin-top:3px}
+  .tk-gaxis span{flex:1 1 0;text-align:center;font-size:9.5px;color:var(--muted);opacity:.8}
+  /* 右栏 */
+  .tk-rail{position:sticky;top:8px;background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:11px;max-height:calc(100vh - 140px);overflow:auto}
+  .tk-rail h3{margin:0 0 9px;font-size:12.5px;display:flex;align-items:center;gap:7px}
+  .tk-rail h3 .bx{margin-left:auto;font-size:10.5px;color:var(--muted);cursor:pointer;border:1px solid var(--card-border);border-radius:6px;padding:1px 6px;font-weight:500}
+  .tk-rail h3 .bx:hover{border-color:var(--accent);color:var(--accent)}
+  .tk-rrow{display:flex;align-items:center;gap:7px;padding:5px 7px;border-radius:8px;font-size:12px;cursor:pointer;margin-bottom:4px;border:1px solid transparent}
+  .tk-rrow:hover{background:var(--card-bg-2)}
+  .tk-rrow.over{background:color-mix(in srgb,#ef4444 8%,transparent);border-color:#ef444440}
+  .tk-rrow.today{background:color-mix(in srgb,var(--accent) 10%,transparent);border-color:color-mix(in srgb,var(--accent) 35%,transparent)}
+  .tk-rrow .t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-rsec{font-size:10px;font-weight:800;color:var(--muted);letter-spacing:.05em;margin:10px 0 5px;opacity:.9}
+  .tk-rsec:first-of-type{margin-top:0}
+  .tk-det h4{margin:0 0 3px;font-size:14px;line-height:1.35}
+  .tk-det .kv{display:grid;grid-template-columns:58px 1fr;gap:6px 9px;font-size:12px;margin-top:10px}
+  .tk-det .kv i{font-style:normal;color:var(--muted)}
+  .tk-projmini{background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:9px;padding:8px 10px;font-size:12px}
+  .tk-projmini .pn{font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .tk-projmini .pm{font-size:10.5px;color:var(--muted);line-height:1.7}
+  .tk-msg{display:flex;gap:7px;margin-bottom:9px;font-size:12px}
+  .tk-msg .b{background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:9px;padding:6px 9px;flex:1 1 auto;min-width:0}
+  .tk-rbtns{display:flex;gap:7px;margin-top:10px}
+  .tk-rbtns .tk-btn{flex:1 1 auto;justify-content:center}
+  /* 脏数据确认条（不替换原有页脚按钮，避免打断编辑器自身事件） */
+  .tk-dirtybar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;padding:8px 11px;border-radius:9px;background:color-mix(in srgb,#f5a524 12%,transparent);border:1px solid #f5a52466;font-size:12.5px}
+  .tk-dirtybar .sp{flex:1 1 auto}
+  @media(max-width:1280px){.tk-wrap{grid-template-columns:1fr}.tk-rail{position:static;max-height:none}}
+  @media(max-width:900px){.tk-lane-bd{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:640px){.tk-lane-bd{grid-template-columns:1fr}.tk-proj-hd .sum{display:none}}
   @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}.card:hover,.gd-card:hover,.gd-task:hover{transform:none}}
 `;
 
@@ -1711,6 +2286,20 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     root.querySelector('#dClose').onclick = closeDrawer;
     root.querySelector('#dScrim').onclick = closeDrawer;   // 点遮罩也关
     root.querySelector('#gmClose').onclick = () => closeModal('genericModal');
+    /* v2.5：所有 .modal 都支持点空白处关闭（此前只有 ✕ 和 Esc，用户实测点不动） */
+    root.querySelectorAll('.modal').forEach(m => m.addEventListener('click', ev => {
+      if (ev.target !== m) return;
+      closeModal(m.classList.contains('genericModal') ? 'genericModal' : 'conflictModal');
+    }));
+    /* v2.5：编辑器脏数据守卫 —— 改过内容再关，先在弹窗内插一条确认条（不动原有页脚按钮，避免打断编辑器事件） */
+    const gmBodyEl = root.querySelector('#gmBody');
+    if (gmBodyEl) { gmBodyEl.addEventListener('input', () => { if (modalOptions) EDIT_DIRTY = true; });
+                    gmBodyEl.addEventListener('change', () => { if (modalOptions) EDIT_DIRTY = true; }); }
+    const gmFootEl = root.querySelector('#gmFoot');
+    if (gmFootEl) gmFootEl.addEventListener('click', ev => {
+      const b = ev.target.closest('button');
+      if (b && (b.classList.contains('pri') || b.classList.contains('danger'))) EDIT_DIRTY = false;  // 保存/删除 = 有意提交
+    });
     root.querySelector('#cfClose').onclick = () => closeModal('conflictModal');
     root.addEventListener('click', onRootClick);
     root.addEventListener('change', onRootChange);
@@ -2343,8 +2932,26 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     if (undoFn) { const b = t.querySelector('.undoBtn'); if (b) b.onclick = () => { undoFn(); t.classList.remove('show'); }; }
     clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), undoFn ? 4200 : 2400);
   }
-  function openModal(cls) {const m=root.querySelector('.'+cls);if(m){modalReturn=root.activeElement;m.classList.add('show');m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');m.setAttribute('aria-label',root.querySelector('#gmTitle')?.textContent||'对话框');setTimeout(()=>m.querySelector('input,button,select,textarea')?.focus(),0);}}
-  function closeModal(cls) {if(cls==='genericModal'&&modalOptions&&typeof modalOptions.beforeClose==='function'){let ok=true;try{ok=modalOptions.beforeClose();}catch(e){ok=true;}if(ok===false)return;}const m=root.querySelector('.'+cls);if(m)m.classList.remove('show');if(cls==='genericModal'){modalOptions=null;const box=root.querySelector('#gmBody');box.oninput=null;box.onclick=null;}modalReturn?.focus?.();if(pendingPush&&!syncing){pendingPush=false;scheduleSync();}}
+  function openModal(cls) {EDIT_DIRTY=false;const m=root.querySelector('.'+cls);if(m){modalReturn=root.activeElement;m.classList.add('show');m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');m.setAttribute('aria-label',root.querySelector('#gmTitle')?.textContent||'对话框');setTimeout(()=>{(m.querySelector('#gmBody input,#gmBody select,#gmBody textarea')||m.querySelector('input,select,textarea,button'))?.focus();},0);}}
+  function closeModal(cls) {
+    /* v2.5 脏数据守卫：改过内容第一次关 → 不关，改弹窗里插确认条；再点「放弃改动」才真关 */
+    if(cls==='genericModal' && EDIT_DIRTY && root){
+      const m0=root.querySelector('.genericModal'), bd=root.querySelector('#gmBody');
+      if(m0 && bd && !bd.querySelector('.tk-dirtybar')){
+        const bar=document.createElement('div');
+        bar.className='tk-dirtybar';
+        bar.innerHTML='<span>⚠️ 有未保存的改动，确定关掉？</span><span class="sp"></span>'
+          +'<button type="button" class="btn" data-tk-keep>继续编辑</button>'
+          +'<button type="button" class="btn danger" data-tk-drop>放弃改动</button>';
+        bd.insertBefore(bar, bd.firstChild);
+        bar.querySelector('[data-tk-keep]').onclick=()=>{ bar.remove(); };
+        bar.querySelector('[data-tk-drop]').onclick=()=>{ EDIT_DIRTY=false; bar.remove(); closeModal('genericModal'); };
+        setTimeout(()=>bar.scrollIntoView({block:'nearest'}),0);
+        return;
+      }
+    }
+    EDIT_DIRTY=false;
+    if(cls==='genericModal'&&modalOptions&&typeof modalOptions.beforeClose==='function'){let ok=true;try{ok=modalOptions.beforeClose();}catch(e){ok=true;}if(ok===false)return;}const m=root.querySelector('.'+cls);if(m)m.classList.remove('show');if(cls==='genericModal'){modalOptions=null;const box=root.querySelector('#gmBody');box.oninput=null;box.onclick=null;}modalReturn?.focus?.();if(pendingPush&&!syncing){pendingPush=false;scheduleSync();}}
   /* 页面内确认框（2026-10-13 替代原生 confirm —— 原生弹窗又丑、手机端还容易被拦）
      ⚠️ 原生 confirm 是同步的，这里换成异步 ⇒ 调用方必须把「确认后要做的事」写成 then 回调 */
   function askConfirm(opt) {
@@ -2368,7 +2975,15 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     if(modal&&e.key==='Tab'){const list=[...modal.querySelectorAll('button,input,select,textarea,[tabindex]')].filter(x=>!x.disabled&&x.getClientRects().length);if(list.length){const i=list.indexOf(root.activeElement);if(e.shiftKey&&(i<=0)){e.preventDefault();list.at(-1).focus();}else if(!e.shiftKey&&(i===list.length-1||i<0)){e.preventDefault();list[0].focus();}}return;}
     const input=e.composedPath().find(x=>x.matches?.('input,textarea,[contenteditable=true]'));
     if(input&&e.key!=='Escape')return;
-    if(MODE==='dev'&&e.key!=='Escape')return;
+    if(MODE==='dev'&&e.key!=='Escape'){
+      /* v2.5：任务看板快捷键（1/2/3 切视图 · j/k 换卡 · t 开关右栏 · / 搜索 · Enter 编辑） */
+      if(GameDev._tab==='devTask'){
+        if(e.key==='/'){const kw=root.querySelector('[data-tk-kw]');if(kw){e.preventDefault();kw.focus();}return;}
+        if(e.key==='Enter'&&TBoard.rsel){e.preventDefault();GameDev.openEditor('devTask',TBoard.rsel);return;}
+        if(TBoard.key(e)){e.preventDefault();GameDev.repaint();}
+      }
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     if ((e.metaKey || e.ctrlKey) && e.key === 'y') { e.preventDefault(); redo(); }
     if (e.key === 'Escape') { closeDrawer(); closeModal('genericModal'); closeModal('conflictModal'); }
