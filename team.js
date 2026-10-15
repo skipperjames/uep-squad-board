@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.4.1-20261015
+   team.js —— UE 团队看板「植入工具」  v2.4.2-20261015
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.4.1-20261015'; // 编辑锁上卡（胶囊+条纹，15分钟过期，4分钟续期，关闭任一路径解锁）+ 卡脚 🕘 历史 + 时光机补日期与字段级更新内容
+  const VERSION = 'v2.4.2-20261015'; // 轮询自适应：有人正在编辑(有锁)→5s，平时 20s（保 token 配额）
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -1953,37 +1953,46 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   }
 
   /* ============================================================
-     自动同步（2026-10-13 新增）
+     自动同步（2026-10-13 新增；2026-10-15 v2.4.2 改自适应频率）
      ------------------------------------------------------------
      之前只在 mount 时 pull 一次 ⇒ 同事改了卡片，你这边**必须手点「🔄 刷新」**才看得到。
-     现在补三层，尽量静默、不打扰、不烧 API 配额：
-       ① 每 20 秒轮询一次（页面可见 + 抽屉没开 + 没在同步中 + 距上次>5s）
+     现在三层，尽量静默、不打扰、不烧 API 配额：
+       ① 自适应轮询：**有人正在编辑（存在 15 分钟内的锁）→ 5 秒一班**；平时 20 秒一班
+          （锁胶囊/别人的改动最多 5 秒出现在你屏幕上）
        ② 切回这个标签页（visibilitychange → visible）立刻拉
        ③ 窗口重新获焦（focus）立刻拉
      ⚠️ 抽屉打开时不拉：编辑中的 curCard 指向旧对象，pull 后 applyState 会换掉 DATA，
         这时保存会把改动写回悬空对象 ⇒ 直接丢数据。
      ⚠️ 轮询用静默模式（pull(true)）：不闪「拉取中…」、失败也不动状态灯。
-     配额：20s 一次 ≈ 180 次/小时/标签页，fine-grained token 上限 5000/小时，够用。 */
-  let autoTimer = null, lastAuto = 0;
+     配额：5s 一班 ≈ 720 次/小时/标签页 ×2 请求；只在有锁时启用 ⇒ 三人常态仍是 20s
+        （180 次/小时/标签页），fine-grained token 5000/小时才不会被打爆。 */
+  let autoTimer = null, lastAuto = 0, nextAutoMs = 20000;
   function autoPull() {
+    scheduleAuto();                                   // 先排下一班，再决定这一班拉不拉
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
     if (curCard || root?.querySelector('.modal.show')) return;                              // 正在编辑，别打扰
     if (syncing) return;                              // 已有同步在跑
     if (!CONFIG.channel || CONFIG.channel.type === 'local') return;
     const t = Date.now();
-    if (t - lastAuto < 5000) return;                  // 防重入（轮询 + focus 可能撞一起）
+    if (t - lastAuto < 3000) return;                  // 防重入（轮询 + focus 可能撞一起）
     lastAuto = t;
     pull(true);
   }
+  function scheduleAuto() {
+    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+    const hasLock = (DEV.devTasks || []).some(function(r){const lb=r.lockedBy;return lb&&lb.by&&lb.by!==CONFIG.me&&(now()-(lb.at||0))<15*60000;});
+    nextAutoMs = hasLock ? 5000 : 20000;
+    autoTimer = setTimeout(autoPull, nextAutoMs);
+  }
   function startAutoSync() {
     stopAutoSync();
-    autoTimer = setInterval(autoPull, 20000);
+    scheduleAuto();
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', autoPull);
     }
     if (typeof window !== 'undefined') window.addEventListener('focus', autoPull);
   }
-  function stopAutoSync() { if(autoTimer){clearInterval(autoTimer);autoTimer=null;} document.removeEventListener('visibilitychange',autoPull);global.removeEventListener?.('focus',autoPull); }
+  function stopAutoSync() { if(autoTimer){clearTimeout(autoTimer);autoTimer=null;} document.removeEventListener('visibilitychange',autoPull);global.removeEventListener?.('focus',autoPull); }
   function sendDisc(id) {
     const inp = root.querySelector('#discInput'); if (!inp) return;
     const v = inp.value.trim(); if (!v) return;
@@ -2344,6 +2353,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     },
     /* 模拟「别人正在编辑」锁（24） */
     setLock(cardId, by) { if (by) LOCKED[cardId] = { by, at: now() }; else delete LOCKED[cardId]; render(); return api; },
+    _autoNextMs() { return nextAutoMs; },   // v2.4.2 测试钩子：当前自适应轮询间隔
     on,
     mount(sel) {
       hostEl = typeof sel === 'string' ? document.querySelector(sel) : sel;
