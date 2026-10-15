@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.2.0-20261014
+   team.js —— UE 团队看板「植入工具」  v2.3.2-20261015
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.2.0-20261014'; // 团队开发六页签 / 共享字段合并 / 删除标记 / 私仓附件
+  const VERSION = 'v2.3.2-20261015'; // 恢复 v2.3.1 设计 + 项目资源区可折叠 / 链接可点可复制
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -86,6 +86,25 @@
 
   const now = () => Date.now();
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  // v2.3.2：把已转义文本里的 URL 变成可点链接（先 esc 再包 <a>，天然防注入）
+  const linkify = s => String(s == null ? '' : s).replace(/(https?:\/\/[^\s<]+)/g, '<a class="gd-a" href="$1" target="_blank" rel="noopener noreferrer" title="点击打开链接">$1</a>');
+  // v2.3.2：项目资源区折叠状态（设备本地 localStorage，不进任何同步通道）
+  const resFoldMap = () => { try { return JSON.parse(localStorage.getItem('niko_team_resfold') || '{}'); } catch (e) { return {}; } };
+  const resFolded = pid => resFoldMap()[pid] !== 0; // 没动过 = 默认收起
+  const toggleResFold = pid => { const m = resFoldMap(); m[pid] = (m[pid] === 0 ? 1 : 0); try { localStorage.setItem('niko_team_resfold', JSON.stringify(m)); } catch (e) {} };
+  // v2.3.2：复制到剪贴板（Shadow DOM / 非 https 环境兜底走 execCommand）
+  const copyText = (txt, ok) => {
+    const done = () => { if (ok) ok(); };
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).then(done, () => { legacyCopy(txt); done(); }); }
+    else { legacyCopy(txt); done(); }
+  };
+  const legacyCopy = txt => {
+    const ta = document.createElement('textarea');
+    ta.value = txt; ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  };
   const fmtT = t => { const d = new Date(t); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
   const daysLeft = ms => Math.round((ms - now()) / 86400000);
   const dstr = ms => { const d = new Date(ms); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
@@ -400,8 +419,8 @@ const GameDev = {
     const running=D.devAll('devTime').filter(r=>r.startedAt&&!r.endedAt);
     const timerNotice=tab!=='devTime'&&running.length?'<div class="gd-running-notice"><span>工作计时正在进行'+(running.length>1?'（'+running.length+' 段）':'')+' · <strong data-gd-clock="'+running[0].startedAt+'">'+clock(Date.now()-running[0].startedAt)+'</strong></span><button class="btn btn-sm" data-gd-tab="devTime">查看计时</button></div>':'';
     const summary=id?D.devTimeSummary(id,D.shift(D.today(),-6),D.today()):{minutes:0};
-    const title='<div class="gd-heading"><div class="gd-head-l"><div class="gd-eyebrow">UE / HOUDINI · 三人共享开发工作区</div><h2>一起把作品做出来</h2></div><div class="gd-project-bar"><label for="gd-project">当前项目</label><select class="input" id="gd-project" data-no-draft>'+optionList(projects.map(r=>[r.id,r.name+(r.status==='archived'?'（已归档）':'')]),id,projects.length?'':'还没有项目')+'</select><button class="btn btn-primary" data-gd-new-project>'+I.get('plus')+'新建项目</button><button class="btn" data-gd-projects>'+I.get('gamepad')+'项目管理</button></div></div>';
-    const picker='';
+    const title='<div class="gd-heading"><div><div class="gd-eyebrow">UE / HOUDINI · 三人共享开发工作区</div><h2>一起把作品做出来</h2><p>计划、制作、验证与复盘，都围绕同一个项目。</p></div><button class="btn" data-gd-projects>'+I.get('gamepad')+'项目管理</button></div>';
+    const picker='<div class="gd-project-bar"><label for="gd-project">当前项目</label><select class="input" id="gd-project" data-no-draft>'+optionList(projects.map(r=>[r.id,r.name+(r.status==='archived'?'（已归档）':'')]),id,projects.length?'':'还没有项目')+'</select><button class="btn btn-primary" data-gd-new-project>'+I.get('plus')+'新建项目</button></div>';
     const kpiItems=[['任务总数',tasks.length],['进行中',tasks.filter(r=>r.status==='doing').length],['待验收',tasks.filter(r=>r.status==='review').length],['待开发',tasks.filter(r=>r.status==='backlog').length],['未关闭 BUG',bugs.filter(r=>r.status!=='closed').length],['近 7 天工时',hours(summary.minutes)],['资产就绪',assets.filter(r=>assetProgress(r).percent===100).length+' / '+assets.length]];
     const kpibar='<div class="gd-kpibar">'+kpiItems.map(function(k){return '<span><b>'+esc(String(k[1]))+'</b>'+esc(k[0])+'</span>';}).join('<i class="gd-kpibar-sep">·</i>')+'</div>';
     const info=p?'<section class="gd-project-card"><div class="gd-project-top"><div><h3>'+esc(p.name)+'</h3><div class="gd-meta">'+badge(p.status)+'<span>'+esc(p.engine || '未设置工具')+'</span>'+dateHint(p.targetDate,p.status==='released')+'</div></div><button class="btn btn-sm" data-gd-edit="devProject" data-id="'+esc(p.id)+'">编辑项目</button></div>'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+kpibar+this.resourcePanel(p)+'</section>':'';
@@ -480,13 +499,26 @@ const GameDev = {
       items.push({ic:ic,lb:lb,vl:seg[1] || '',sub:seg[2] || ''});
     });
     if(!items.length && !notes.length && !p.notice)return '<div class="gd-res gd-res-empty"><span class="gd-res-h">📌 项目资源</span><span class="gd-res-hint">工程总路径 / 素材网盘 / 排期表 / 策划文档 / ⚠️注意事项 / 📢公告 —— 点右上「编辑项目」填一次，全组都能用</span></div>';
-    return '<div class="gd-res">'
+    // v2.3.2：默认收起（点标题展开/收起，状态记在本机 localStorage，各项目独立记忆）
+    const folded=resFolded(p.id);
+    const nRes=items.length,nNote=notes.length,nB=(p.notice?1:0);
+    const summary=(nRes?nRes+' 项资源':'')+(nNote?(nRes?' · ':'')+nNote+' 条注意事项':'')+(nB?((nRes||nNote)?' · ':'')+'有公告':'')||'空';
+    const body='<div class="gd-res-body'+(folded?' folded':'')+'">'
       + (items.length ? '<div class="gd-res-grid">' + items.map(function(it){
-          return '<div class="gd-res-i"><span class="gd-res-ic">' + esc(it.ic) + '</span><span class="gd-res-tx"><b>' + esc(it.lb) + (it.sub ? '　·　' + esc(it.sub) : '') + '</b><i>' + esc(it.vl) + '</i></span></div>';
-        }).join('') + '</div>' : '')
-      + (notes.length ? '<div class="gd-res-notes"><b>⚠️ 注意事项</b><ul>' + notes.map(function(n){return '<li>' + esc(n) + '</li>';}).join('') + '</ul></div>' : '')
-      + (p.notice ? '<div class="gd-res-notice"><b>📢 公告</b><span>' + esc(p.notice) + '</span></div>' : '')
+            const isUrl=/^https?:\/\//i.test(it.vl);
+            const val=isUrl
+              ? '<a class="gd-res-vl gd-a" href="'+esc(it.vl)+'" target="_blank" rel="noopener noreferrer" title="点击打开链接">'+esc(it.vl)+'</a>'
+              : '<i class="gd-res-vl">'+esc(it.vl)+'</i>';
+            return '<div class="gd-res-i"><span class="gd-res-ic">' + esc(it.ic) + '</span><span class="gd-res-tx"><b>' + esc(it.lb) + (it.sub ? '　·　' + esc(it.sub) : '') + '</b>' + val + '</span>'
+              + '<button type="button" class="gd-res-copy" data-gd-rescopy="'+encodeURIComponent(it.vl || '')+'" title="一键复制">'+ (isUrl ? '⧉ 复制链接' : '⧉ 复制') +'</button></div>';
+          }).join('') + '</div>' : '')
+      + (notes.length ? '<div class="gd-res-notes"><b>⚠️ 注意事项</b><ul>' + notes.map(function(n){return '<li>' + linkify(esc(n)) + '</li>';}).join('') + '</ul></div>' : '')
+      + (p.notice ? '<div class="gd-res-notice"><b>📢 公告</b><span>' + linkify(esc(p.notice)) + '</span></div>' : '')
       + '</div>';
+    return '<div class="gd-res">'
+      + '<button type="button" class="gd-res-head" data-gd-resfold="'+esc(p.id)+'" aria-expanded="'+(!folded)+'" title="'+(folded?'展开':'收起')+'项目资源">'
+      + '<span>📌 项目资源</span><small>'+esc(summary)+'</small><i class="gd-res-chev">'+(folded?'▸':'▾')+'</i></button>'
+      + body + '</div>';
   },
   tasks:function(rows,all,milestones) {
     const statuses=D.DEV_SCHEMA.devTasks.choices.status;
@@ -585,6 +617,11 @@ const GameDev = {
       }catch(err){App.toast(err.message,7000);}
     });
     box.addEventListener('click',function(e){
+      // v2.3.2：项目资源区 —— 一键复制 / 折叠（放最前，避免被别的委托吃掉）
+      const rcopy=e.target.closest('[data-gd-rescopy]');
+      if(rcopy){let txt=rcopy.dataset.gdRescopy||'';try{txt=decodeURIComponent(txt);}catch(x){}copyText(txt,function(){App.toast('已复制到剪贴板');});return;}
+      const rf=e.target.closest('[data-gd-resfold]');
+      if(rf){toggleResFold(rf.dataset.gdResfold);self.repaint();return;}
       const ar=e.target.closest('[data-gd-area]'),st=e.target.closest('[data-gd-stage]'),so=e.target.closest('[data-gd-soft]'),cf=e.target.closest('[data-gd-clearflt]');
       if(ar){self._area=ar.dataset.gdArea;self._stage='';self.repaint();return;}
       if(st){self._stage=(self._stage===st.dataset.gdStage?'':st.dataset.gdStage);self.repaint();return;}
@@ -1099,19 +1136,19 @@ const GameDev = {
   .chkbox{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex-shrink:0}
   .gd-root { width:100%;min-width:0;container:gamedev / inline-size; }
 .gd-root svg,.gd-form svg { width:18px;height:18px;flex:none; }
-.gd-heading { display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 12px; }
-.gd-heading h2 { font-size:18px;letter-spacing:-.02em;margin:2px 0 0;line-height:1.3; }
+.gd-heading { display:flex;align-items:center;justify-content:space-between;gap:20px;margin:4px 0 22px; }
+.gd-heading h2 { font-size:26px;letter-spacing:-.03em;margin:6px 0;line-height:1.35; }
 .gd-heading p,.gd-timer p { font-size:13px;color:var(--muted);line-height:1.8;margin:0; }
-.gd-eyebrow { font-size:10px;letter-spacing:.08em;color:var(--brand-ink);font-weight:600; }
+.gd-eyebrow { font-size:11px;letter-spacing:.08em;color:var(--brand-ink);font-weight:600; }
 .gd-heading .btn,.gd-project-bar .btn,.gd-toolbar .btn { display:inline-flex;gap:7px;align-items:center;white-space:nowrap; }
-.gd-project-bar { display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;margin-bottom:0;flex-wrap:wrap;justify-content:flex-end; }
+.gd-project-bar { display:flex;align-items:center;gap:12px;margin-bottom:16px; }
 .gd-project-bar label { color:var(--muted);font-size:13px;flex:none; }
-.gd-project-bar select { flex:0 1 210px;min-width:110px;max-width:250px; }
-.gd-project-card { border:1px solid var(--line);border-radius:14px;background:linear-gradient(110deg,var(--surface),var(--brand-soft));padding:14px 16px;margin-bottom:14px; }
+.gd-project-bar select { flex:1;min-width:0;max-width:520px; }
+.gd-project-card { border:1px solid var(--line);border-radius:20px;background:linear-gradient(110deg,var(--surface),var(--brand-soft));padding:22px;margin-bottom:22px; }
 .gd-project-top,.gd-card-head { display:flex;align-items:flex-start;justify-content:space-between;gap:12px; }
-.gd-project-top h3 { font-size:16px;font-weight:650;margin:0 0 4px;overflow-wrap:anywhere; }
+.gd-project-top h3 { font-size:21px;font-weight:650;margin:0 0 10px;overflow-wrap:anywhere; }
 .gd-project-top .btn { flex:none; }
-.gd-project-desc { color:var(--muted);line-height:1.8;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0;max-width:100ch; }
+.gd-project-desc { color:var(--muted);line-height:1.8;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0;max-width:100ch; }
 .gd-kpis { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;margin-top:20px;border-top:1px solid var(--line);padding-top:18px; }
 .gd-kpi span { display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px; }
 .gd-kpi strong { display:block;font-size:25px;font-weight:650;font-variant-numeric:tabular-nums;margin-top:7px; }
@@ -1207,12 +1244,24 @@ const GameDev = {
 .gd-field textarea { min-height:132px;resize:vertical; }
 /* ---- 项目资源区 ---- */
 .gd-res { margin-top:12px; border-top:1px solid var(--card-border); padding-top:11px; }
-.gd-res-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
+.gd-res-head { display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:2px 0;margin:0;cursor:pointer;font:inherit;color:inherit;text-align:left; }
+.gd-res-head span { font-size:12px;font-weight:600; }
+.gd-res-head small { color:var(--muted);font-size:10.5px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.gd-res-head:hover span { color:var(--accent); }
+.gd-res-chev { margin-left:auto;font-style:normal;font-size:10px;color:var(--muted);flex:0 0 auto; }
+.gd-res-body.folded { display:none; }
+.gd-res-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px; }
 .gd-res-i { display:flex;align-items:center;gap:9px;background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:10px;padding:7px 10px;min-width:0; }
 .gd-res-ic { width:26px;height:26px;border-radius:8px;background:var(--soft,rgba(102,126,234,.12));display:grid;place-items:center;font-size:13px;flex:0 0 auto; }
 .gd-res-tx { min-width:0;display:flex;flex-direction:column; }
-.gd-res-tx b { font-size:10.5px;font-weight:500;color:var(--muted); }
-.gd-res-tx i { font-style:normal;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.gd-res-tx b { font-size:10.5px;font-weight:500;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.gd-res-vl { font-style:normal;font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;min-width:0;max-width:100%; }
+a.gd-a { color:var(--accent);text-decoration:none; }
+a.gd-a:hover { text-decoration:underline; }
+.gd-res-copy { flex:0 0 auto;border:1px solid var(--card-border);background:var(--card-bg);color:var(--muted);border-radius:8px;font-size:10.5px;padding:4px 9px;cursor:pointer;white-space:nowrap;font-family:inherit; }
+.gd-res-copy:hover { color:var(--accent);border-color:var(--accent); }
+.gd-res-notes a, .gd-res-notice a { color:var(--accent);text-decoration:none; }
+.gd-res-notes a:hover, .gd-res-notice a:hover { text-decoration:underline; }
 .gd-res-empty { display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--card-border);padding-top:11px;margin-top:12px; }
 .gd-res-empty .gd-res-h { font-size:12px;font-weight:600; }
 .gd-res-empty .gd-res-hint { font-size:11.5px;color:var(--muted);line-height:1.7; }
@@ -1231,7 +1280,7 @@ const GameDev = {
 .gd-path { font-size:10.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:2px 0 4px; }
 .gd-owner-pick { display:flex;flex-wrap:wrap;gap:8px; }
 /* ================= v2.3 顶部区：一行 KPI / 分区 / 流程阶段 / 软件 ================= */
-.gd-kpibar { display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;margin-top:10px;border-top:1px solid var(--line);padding-top:9px;font-size:12px;color:var(--muted);line-height:1.6; }
+.gd-kpibar { display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;margin-top:16px;border-top:1px solid var(--line);padding-top:14px;font-size:12px;color:var(--muted);line-height:1.9; }
 .gd-kpibar b { color:var(--ink);font-size:15px;font-weight:650;font-variant-numeric:tabular-nums;margin-right:4px; }
 .gd-kpibar-sep { color:var(--line);font-style:normal; }
 .gd-filterbar { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;font-size:12px; }
@@ -1288,15 +1337,14 @@ const GameDev = {
 }
 @media (max-width:700px) {
   #view-root[data-view="gamedev"] { padding:12px; }
-  .gd-heading { align-items:flex-start;gap:10px; }
-  .gd-heading h2 { font-size:17px; }
+  .gd-heading { align-items:flex-start;gap:12px; }
+  .gd-heading h2 { font-size:21px; }
   .gd-heading > .btn { font-size:11px;padding-inline:8px; }
   .gd-heading .gd-eyebrow { font-size:9px; }
-  .gd-project-bar { flex-wrap:wrap;gap:8px;width:100%;justify-content:flex-start; }
-  .gd-project-bar label { width:auto;flex:0 0 auto; }
-  .gd-project-bar select { flex:0 1 168px;min-width:0; }
-  .gd-project-card { padding:13px 14px; }
-  .gd-project-top h3 { font-size:15px; }
+  .gd-project-bar { flex-wrap:wrap;gap:8px; }
+  .gd-project-bar label { width:100%; }
+  .gd-project-card { padding:16px; }
+  .gd-project-top h3 { font-size:18px; }
   .gd-kpis { grid-template-columns:repeat(2,minmax(0,1fr));gap:14px; }
   .gd-kpi strong { font-size:22px; }
   .gd-tabs { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
