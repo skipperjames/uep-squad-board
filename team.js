@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.4.0-20261015
+   team.js —— UE 团队看板「植入工具」  v2.4.1-20261015
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.4.0-20261015'; // 任务卡+编辑弹窗一比一重排（卡序/列头彩点/去按钮堆叠 → 💬+编辑；弹窗双列/滑条/分区阶段软件芯片/讨论内置/更改保存+草稿+删除）
+  const VERSION = 'v2.4.1-20261015'; // 编辑锁上卡（胶囊+条纹，15分钟过期，4分钟续期，关闭任一路径解锁）+ 卡脚 🕘 历史 + 时光机补日期与字段级更新内容
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -253,9 +253,20 @@
     const before=clone(collectLocal());
     r.owner=r.owner||CONFIG.me;r.recorder=old?.recorder||CONFIG.me;r.checks=r.checks||{};
     stamp(r,old);DEV[key]=old?DEV[key].map(x=>x.id===id?r:x):[...DEV[key],r];
-    log(old?'edit':'create',r.id,(kind==='devProject'?'项目':'开发记录')+' · '+(r.name||r.title||r.date));
+    // v2.4.1：历史细节带「更新了哪些字段」（lockedBy 是锁标记，不算内容更新）
+    const changed=old?Object.keys(patch||{}).filter(k=>k!=='lockedBy'&&!equal((old||{})[k],r[k])):[];
+    log(old?'edit':'create',r.id,(kind==='devProject'?'项目':'开发记录')+' · '+(r.name||r.title||r.date)+(old&&changed.length?'（更新 '+changed.map(k=>fieldLabel(k)).join('、')+'）':''));
     try { save(); } catch(e){applyState(before);throw e;}
     return r;
+  }
+  // v2.4.1：编辑锁 —— 只写 lockedBy，不进历史、不触发校验；open/close 各一次，4 分钟续期
+  function devLock(id,on) {
+    const key='devTasks',i=DEV[key].findIndex(r=>r.id===id);if(i<0)return;
+    const before=clone(collectLocal());
+    const r=clone(DEV[key][i]);
+    if(on)r.lockedBy={by:CONFIG.me,at:now()};else delete r.lockedBy;
+    DEV[key]=DEV[key].map((x,xi)=>xi===i?r:x);
+    try{save();}catch(e){applyState(before);}
   }
   function devRemove(kind,id) {
     if(kind==='devProject')throw Error('项目请改为归档，以保留关联历史');
@@ -565,7 +576,11 @@ const GameDev = {
         const pathRow=r.path?'<div class="gd-pathrow"><span class="gd-pathlab">UE</span><code class="gd-path" title="'+esc(r.path)+'">'+esc(r.path)+'</code></div>':'';
         const extra=(milestone?'<div class="gd-task-extra">里程碑 · '+esc(milestone.title)+'</div>':'')+(dep?'<div class="gd-task-extra gd-dependency'+(dep.status!=='done'?' is-blocked':'')+'">前置 · '+esc(dep.title)+(dep.status==='done'?'（完成）':'（未完成）')+'</div>':'');
         const nDisc=discCount(r.id);
-        const foot='<div class="gd-task-foot"><button type="button" class="gd-disc-chip" data-gd-disc="devTask" data-id="'+esc(r.id)+'" title="团队讨论">💬'+(nDisc?' '+nDisc:'')+'</button><button type="button" class="gd-card-edit" data-gd-edit="devTask" data-id="'+esc(r.id)+'" title="编辑任务">✏️ 编辑</button></div>';
+        // v2.4.1：编辑锁 —— 别人锁的且 15 分钟内 → 卡上胶囊 + 条纹底；自己锁的不显示
+        const lb=r.lockedBy;
+        const locked=lb&&lb.by&&lb.by!==CONFIG.me&&(now()-(lb.at||0))<15*60000;
+        const pill=locked?'<span class="gd-editing-pill"><i></i>'+esc(roleOf(lb.by).n)+' 正在编辑</span>':'';
+        const foot='<div class="gd-task-foot"><button type="button" class="gd-disc-chip" data-gd-disc="devTask" data-id="'+esc(r.id)+'" title="团队讨论">💬'+(nDisc?' '+nDisc:'')+'</button><button type="button" class="gd-hist" data-gd-history="'+esc(r.id)+'" title="历史操作记录（时间 · 内容 · 操作人）">🕘</button><button type="button" class="gd-card-edit" data-gd-edit="devTask" data-id="'+esc(r.id)+'" title="编辑任务">✏️ 编辑</button></div>';
         // 交期按目标设计拆两段：日期+交 / 超期红字
         let dueHtml='';
         if(r.dueDate){const md=String(r.dueDate).slice(5);
@@ -575,8 +590,9 @@ const GameDev = {
           else if(diff===0)dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due is-overdue">0 天</span>';
           else dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due">剩 '+diff+' 天</span>';}
         const pri={high:'P1',mid:'P2',low:'P3'}[r.priority] || '';
-        // v2.4.0：卡序对齐目标设计 = 标题+P1 → 阶段+软件 → 负责人·交期·更新 → 进度 → UE路径 → 💬+编辑
-        return '<article class="gd-task" draggable="true" data-gd-task="'+esc(r.id)+'">'
+        // v2.4.0：卡序对齐目标设计 = 标题+P1 → 阶段+软件 → 负责人·交期·更新 → 进度 → UE路径 → 💬·🕘·编辑
+        return '<article class="gd-task'+(locked?' is-locked':'')+'" draggable="'+(locked?'false':'true')+'" data-gd-task="'+esc(r.id)+'">'
+          + pill
           + '<div class="gd-task-head"><h4>'+esc(r.title)+'</h4><span class="gd-badge gd-badge--'+esc(r.priority)+'">'+esc(pri)+'</span></div>'
           + meta
           + '<div class="gd-ownerline"><button type="button" class="gd-owner" data-gd-owner="'+esc(r.id)+'" title="点击更换负责人"><i class="gd-rdot" style="background:'+esc(role.c)+'"></i><b style="color:'+esc(role.c)+'">'+esc(role.n)+'</b></button>'+dueHtml+fresh+'</div>'
@@ -730,6 +746,8 @@ const GameDev = {
     if(!r){App.toast('记录已被删除');return;}
     if(kind!=='devProject'&&!p){App.toast('请先创建项目');return;}
     if(kind==='devTime'&&r.startedAt&&!r.endedAt){App.toast('请先停止计时，再编辑工时');return;}
+    // v2.4.1：别人 15 分钟内锁着这张卡 → 不开编辑器，只提示
+    if(kind==='devTask'&&id&&r.lockedBy&&r.lockedBy.by&&r.lockedBy.by!==CONFIG.me&&(now()-(r.lockedBy.at||0))<15*60000){App.toast('🔴 '+roleOf(r.lockedBy.by).n+' 正在编辑这张卡，稍后再来');return;}
     const schema=D.DEV_SCHEMA[D.KEYS[kind]];
     let html='';
     let customTask=false; // v2.4.0：devTask 用目标图四的双列大弹窗（自带底栏）
@@ -770,11 +788,16 @@ const GameDev = {
     if(!customTask)html=select('owner','负责人 / 工时成员',Object.entries(ROLE).map(([id,r])=>[id,r.n]),r.owner||CONFIG.me)+html;
     const taskFoot=customTask?'<div class="gd-form-actions gd-full gd-ed-foot"><span class="gd-ed-foot-l"><button type="submit" class="btn btn-primary" id="gd-editor-save">📌 更改保存</button><button type="button" class="btn" id="gd-editor-draft" title="草稿自动存本机">📄 有草稿</button></span>'+(id?'<button type="button" class="btn btn-danger" id="gd-editor-del">🗑 删除</button>':'')+'</div>':'';
     html='<form id="gd-editor" class="gd-form'+(customTask?' gd-form-task':'')+'">'+html+(customTask?taskFoot:'<div class="gd-form-actions gd-full"><button type="button" class="btn" id="gd-editor-cancel">取消</button><button type="submit" class="btn btn-primary" id="gd-editor-save">'+(id?'保存修改':'创建记录')+'</button></div>')+'</form>';
-    App.openModal({title:kind==='devProject'?(id?'编辑项目':'新建开发项目'):(customTask?(id?r.title:NEW_LABELS[kind]):(id?EDIT_LABELS[kind]:NEW_LABELS[kind])),sub:kind==='devProject'?'项目是六类开发记录的归属。':esc(p.name),width:customTask?980:940,html:html,mount:function(body){
+    // v2.4.1：编辑锁 —— 打开即锁 + 4 分钟续期；任何关闭路径（X/保存/删除/Esc）都解锁
+    let lockTimer=null;
+    const releaseLock=()=>{if(lockTimer){clearInterval(lockTimer);lockTimer=null;}if(kind==='devTask'&&id){try{devLock(id,false);}catch(e){}}};
+    const modalOpt={title:kind==='devProject'?(id?'编辑项目':'新建开发项目'):(customTask?(id?r.title:NEW_LABELS[kind]):(id?EDIT_LABELS[kind]:NEW_LABELS[kind])),sub:kind==='devProject'?'项目是六类开发记录的归属。':esc(p.name),width:customTask?980:940,html:html,beforeClose:releaseLock,mount:function(body){
       const form=body.querySelector('form'),draftKey=kind+'|'+(id||p?.id||'new');let images=(r.images || []).slice(),loading=false,checks=Object.assign({},r.checks || {});
       const restored=localDrafts[draftKey];if(restored?.__images)images=restored.__images;if(restored?.__checks)checks=restored.__checks;if(restored){form.querySelectorAll('[name]').forEach(el=>{if(restored[el.name]!==undefined)el.value=restored[el.name];});}
       function persistDraft(){const d={__images:images,__checks:checks};form.querySelectorAll('[name]').forEach(el=>{if(!el.name.startsWith('check-'))d[el.name]=el.value;});try{localDrafts[draftKey]=d;saveDrafts();}catch(err){App.toast('本机草稿保存失败，请保留表单');}}body.oninput=persistDraft;
       if(customTask){
+        // v2.4.1：上锁 + 4 分钟续期（别人看卡 15 分钟内显示「正在编辑」胶囊）
+        if(id){try{devLock(id,true);lockTimer=setInterval(function(){try{devLock(id,true);}catch(e){}},4*60000);}catch(e){}}
         // v2.4.0：草稿恢复后同步芯片选中态 + 滑条标签
         if(restored){form.querySelectorAll('.gd-chiprow').forEach(function(row){const hidden=row.querySelector('input[type=hidden]');const vals=(hidden.value||'').split(',').filter(Boolean);row.querySelectorAll('.gd-pick').forEach(function(b){b.classList.toggle('on',vals.indexOf(String(b.dataset.val))>=0);});});const rv=body.querySelector('.gd-slideval'),rg=form.querySelector('[name=prog]');if(rv&&rg)rv.textContent=rg.value+'%';}
         // 滑条实时 %
@@ -843,11 +866,12 @@ const GameDev = {
         if(kind==='devBug')payload.images=images;
         if(kind==='devAsset')payload.checks=checks;
         try{if(id){Object.keys(payload).forEach(k=>{if(equal(payload[k],r[k])||(typeof payload[k]==='string'&&!payload[k]&&!r[k]))delete payload[k];});const current=D.devAll(kind).find(x=>x.id===id);if(current)Object.entries(payload).forEach(([field,mine])=>{if(!equal(current[field],r[field])&&!equal(current[field],mine)){const key=D.KEYS[kind]+'|'+id+'|'+field;if(!CONFLICTS.some(c=>c.key===key))CONFLICTS.push({key,kind:D.KEYS[kind],id,field,mine,theirs:current[field],by:current.updatedBy,title:current.title||current.name||id});}});}
-        const saved=D.devSave(kind,payload,id);delete localDrafts[draftKey];try{saveDrafts();}catch(e){toast('记录已保存，草稿清理失败','warn');}modalOptions=null;if(kind==='devProject'){self._project=saved.id;self.resetFilters();}App.closeModal();self.repaint();App.toast(id?'修改已保存':'记录已创建');}
+        const saved=D.devSave(kind,payload,id);delete localDrafts[draftKey];try{saveDrafts();}catch(e){toast('记录已保存，草稿清理失败','warn');}releaseLock();modalOptions=null;if(kind==='devProject'){self._project=saved.id;self.resetFilters();}App.closeModal();self.repaint();App.toast(id?'修改已保存':'记录已创建');}
         catch(err){App.toast(err.message,8000);}
       };
       const first=form.querySelector('input,textarea,select');if(first)first.focus({preventScroll:true});
-    }});
+    }};
+    App.openModal(modalOpt);
   }
 };
 
@@ -1301,7 +1325,11 @@ const GameDev = {
 .gd-column { border-radius:16px;border:1px solid var(--line);background:var(--surface-2);padding:12px;min-width:0; }
 .gd-column-title { display:flex;align-items:center;justify-content:space-between;padding:4px 3px 12px;color:var(--muted);font-size:12px; }
 .gd-column-title h3 { font-size:13px;font-weight:600;color:var(--ink);margin:0; }
-.gd-task { background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px; }
+.gd-task { position:relative;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px; }
+.gd-task.is-locked { background:repeating-linear-gradient(135deg,var(--surface),var(--surface) 9px,rgba(139,92,246,.12) 9px,rgba(139,92,246,.12) 18px);border-color:rgba(139,92,246,.55); }
+.gd-editing-pill { position:absolute;top:-9px;right:10px;display:inline-flex;align-items:center;gap:5px;background:#8b5cf6;color:#fff;font-size:10px;font-weight:600;border-radius:999px;padding:2px 9px;box-shadow:0 2px 8px rgba(0,0,0,.28);z-index:2;white-space:nowrap; }
+.gd-editing-pill i { width:6px;height:6px;border-radius:50%;background:#fff;animation:gdPulse 1.2s infinite; }
+@keyframes gdPulse { 50% { opacity:.3; } }
 .gd-task:last-child { margin-bottom:0; }
 .gd-task-head { display:flex;align-items:flex-start;justify-content:space-between;gap:8px; }
 .gd-task-head h4 { font-size:13.5px;line-height:1.5;font-weight:600;overflow-wrap:anywhere;margin:0; }
@@ -1442,6 +1470,8 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
 .gd-task-foot { display:flex;align-items:center;gap:10px;margin-top:10px;padding-top:9px;border-top:1px dashed var(--card-border); }
 .gd-disc-chip { background:none;border:0;color:var(--muted);font-size:11.5px;cursor:pointer;padding:0;font-family:inherit; }
 .gd-disc-chip:hover { color:var(--accent); }
+.gd-hist { background:none;border:1px solid var(--card-border);border-radius:7px;color:var(--muted);font-size:10.5px;padding:3px 8px;cursor:pointer;font-family:inherit;line-height:1.4; }
+.gd-hist:hover { color:var(--accent);border-color:var(--accent); }
 .gd-card-edit { margin-left:auto;background:none;border:1px solid var(--card-border);border-radius:7px;color:var(--muted);font-size:10.5px;padding:3px 9px;cursor:pointer;white-space:nowrap;font-family:inherit; }
 .gd-card-edit:hover { color:var(--accent);border-color:var(--accent); }
 /* ---- v2.4.0 任务编辑大弹窗（目标图四）---- */
@@ -2140,7 +2170,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     const logs = LOG.filter(l => l.cardId === id);
     root.querySelector('#gmTitle').innerHTML = `🕘 变更时光机 · ${esc(c.name||c.title||c.date)}`;
     root.querySelector('#gmBody').innerHTML = logs.length
-      ? `<div class="tl">${logs.map(l => `<div class="tl-i"><div><b>${roleOf(l.by).n}</b> ${esc(l.detail || actLabel(l.act))}<div class="tm">${fmtT(l.t)}</div></div></div>`).join('')}</div>
+      ? `<div class="tl">${logs.map(l => `<div class="tl-i"><div><b>${roleOf(l.by).n}</b> ${esc(l.detail || actLabel(l.act))}<div class="tm">${(new Date(l.t).toDateString()===new Date().toDateString()?'':dstr(l.t)+' ')}${fmtT(l.t)}</div></div></div>`).join('')}</div>
          <div class="mut tiny" style="margin-top:9px">💡 谁在什么时候改了什么，一目了然</div>`
       : '<div class="mut" style="text-align:center;padding:24px 0">这张卡还没有变更记录</div>';
     root.querySelector('#gmFoot').innerHTML = '';
