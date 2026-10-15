@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.4.4-20261015'; // 修×关不掉（beforeClose 只有显式 false 才否决+异常不拦关闭）；成员名去硬编码（只活在 ROLE，全链路 MENTION_HINT/MENTION_RE 派生）
+  const VERSION = 'v2.4.5-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -111,7 +111,7 @@
   const fmtT = t => { const d = new Date(t); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
   const daysLeft = ms => Math.round((ms - now()) / 86400000);
   const dstr = ms => { const d = new Date(ms); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
-  const fieldLabel = f => ({ prog:'进度', note:'任务说明', owner:'负责人', status:'状态', pri:'优先级', due:'交付日', name:'名称',__timeResult:'计时结束与耗时',title:'标题',description:'说明',acceptance:'验收标准',dependsOn:'前置任务' }[f] || f);
+  const fieldLabel = f => ({ prog:'进度', note:'任务说明', owner:'负责人', status:'状态', pri:'优先级', due:'交付日', name:'名称',__timeResult:'计时结束与耗时',title:'标题',description:'说明',acceptance:'验收标准',dependsOn:'前置任务',category:'工作分类' }[f] || f);
   const fieldVal = (f, v) => {
     if (f === 'status') return ST[v] ? ST[v].l : v;
     if (f === 'owner') return (ROLE[v] || {}).n || v;
@@ -245,6 +245,8 @@
     if(id&&!old)throw Error('记录已删除，请关闭编辑器后重新查看');
     const r={...(old||{}),...clone(patch),id:old?.id||uid(),createdAt:old?.createdAt||now(),updatedBy:CONFIG.me};
     if(kind!=='devProject'&&!DEV.devProjects.some(p=>p.id===r.projectId))throw Error('项目不存在');
+    // 新任务表单只提交分区；补齐旧 schema 所需的工作分类，不覆盖已有分类。
+    if(kind==='devTask'&&(r.category==null||r.category===''))r.category=r.area==='art'?'美术':r.area==='prog'?'程序':'其他';
     Object.entries(DEV_SCHEMA[key].choices).forEach(([k,opts])=>{if(!opts.includes(r[k]))throw Error('请选择有效的 '+fieldLabel(k));});
     if((kind==='devProject'||kind==='devAsset')?!String(r.name||'').trim():['devTask','devBug','devMilestone'].includes(kind)&&!String(r.title||'').trim())throw Error('请填写名称');
     if(kind==='devLog'&&!r.done&&!r.blockers&&!r.next)throw Error('至少填写一项进展、阻碍或下一步');
