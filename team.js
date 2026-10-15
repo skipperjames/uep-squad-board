@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.3.3-20261015
+   team.js —— UE 团队看板「植入工具」  v2.4.0-20261015
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.3.3-20261015'; // 表头一比一重排（口号区砍掉/元信息一行/资源区头 编辑+收起）+ 资源动作 右缘 打开↗·复制↗
+  const VERSION = 'v2.4.0-20261015'; // 任务卡+编辑弹窗一比一重排（卡序/列头彩点/去按钮堆叠 → 💬+编辑；弹窗双列/滑条/分区阶段软件芯片/讨论内置/更改保存+草稿+删除）
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -370,6 +370,18 @@ function area(name,label,value,placeholder) {
 function select(name,label,values,value,empty) {
   return '<label class="gd-field" for="gd-f-'+name+'"><span>'+esc(label)+'</span><select class="input" id="gd-f-'+name+'" name="'+name+'">'+optionList(values,value,empty)+'</select></label>';
 }
+// v2.4.0：进度滑条（带 % 实时值）
+function slider(name,label,val) {
+  return '<div class="gd-field gd-sliderfield"><span>'+esc(label)+' <b class="gd-slideval">'+(val==null?0:val)+'%</b></span><input type="range" name="'+name+'" min="0" max="100" step="5" value="'+(val==null?0:val)+'" aria-label="'+esc(label)+'"></div>';
+}
+// v2.4.0：芯片选择组（multi=false 单选；selected 为空 = 未选）
+function chipGroup(name,label,opts,selected,multi) {
+  const cur=multi?(selected||[]):[selected];
+  return '<div class="gd-field gd-chipfield"><span>'+esc(label)+'</span><div class="gd-chiprow" data-chip-name="'+esc(name)+'"'+(multi?' data-multi="1"':'')+'>'
+    +opts.map(function(o){return '<button type="button" class="gd-pick'+(cur.indexOf(String(o[0]))>=0?' on':'')+'" data-val="'+esc(o[0])+'">'+esc(o[1])+'</button>';}).join('')
+    +'<input type="hidden" name="'+esc(name)+'" value="'+esc(multi?(cur||[]).join(','):(selected==null?'':selected))+'">'
+    +'</div></div>';
+}
 function hours(minutes) {return minutes>0&&minutes<.6?'不足 1 分钟':(minutes/60).toLocaleString('zh-CN',{maximumFractionDigits:2})+' h';}
 function clock(ms) {
   const sec=Math.max(0,Math.floor(ms/1000));
@@ -533,19 +545,44 @@ const GameDev = {
   },
   tasks:function(rows,all,milestones) {
     const statuses=D.DEV_SCHEMA.devTasks.choices.status;
+    const COLDOT={backlog:'#f59e0b',doing:'#3b82f6',review:'#8b5cf6',done:'#10b981'};
+    const discCount=id=>(DISCUSS[id]||[]).length;
     return '<div class="gd-board">'+statuses.map(function(status){
       const items=rows.filter(r=>r.status===status).sort(function(a,b){
         const ao=(a.order==null?9999:a.order),bo=(b.order==null?9999:b.order);
         if(ao!==bo)return ao-bo;
         return ['high','mid','low'].indexOf(a.priority)-['high','mid','low'].indexOf(b.priority);
       });
-      return '<section class="gd-column" data-gd-col="'+esc(status)+'"><div class="gd-column-title"><h3>'+LABELS[status]+'</h3><span>'+items.length+'</span></div>'+items.map(function(r){
-        const dep=all.find(t=>t.id===r.dependsOn),milestone=milestones.find(m=>m.id===r.milestoneId),next=statuses[statuses.indexOf(status)+1];
+      return '<section class="gd-column" data-gd-col="'+esc(status)+'"><div class="gd-column-title"><h3><i class="gd-coldot" style="background:'+(COLDOT[status]||'#888')+'"></i>'+LABELS[status]+'</h3><span>'+items.length+'</span></div>'+items.map(function(r){
+        const dep=all.find(t=>t.id===r.dependsOn),milestone=milestones.find(m=>m.id===r.milestoneId);
         const role=ROLE[r.owner] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'};
-        const fresh=(r.updatedBy&&r.updatedBy!==CONFIG.me&&(Date.now()-(r._ut || 0))<180000)?'<span class="gd-fresh">'+esc(roleOf(r.updatedBy).n)+' 刚改过</span>':'';
+        const mins=r._ut?Math.max(1,Math.round((Date.now()-r._ut)/60000)):null;
+        const fresh=(r.updatedBy&&r.updatedBy!==CONFIG.me&&mins&&mins<180)?'<span class="gd-fresh">'+(mins<=1?'刚刚':mins+' 分钟前')+'更新</span>':'';
         const prog=r.prog==null?null:Math.max(0,Math.min(100,Number(r.prog)));
-        const chips='<div class="gd-task-chips">'+(r.stage?'<span class="gd-chip">'+esc(r.stage)+'</span>':'')+String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean).map(function(s){return '<span class="gd-soft"><u>'+esc(({Houdini:'H',UE:'U',Blender:'B'})[s] || s.charAt(0))+'</u>'+esc(s)+'</span>';}).join('')+'</div>';
-        return '<article class="gd-task" draggable="true" data-gd-task="'+esc(r.id)+'"><div class="gd-meta">'+badge(r.priority)+'<span class="gd-cat">'+esc(r.category)+'</span>'+fresh+'</div><h4>'+esc(r.title)+'</h4>'+chips+'<div class="gd-meta gd-ownerline"><button type="button" class="gd-owner" data-gd-owner="'+esc(r.id)+'" title="点击更换负责人"><i class="gd-rdot" style="background:'+esc(role.c)+'"></i><b style="color:'+esc(role.c)+'">'+esc(role.n)+'</b> ▾</button>'+dueChip(r.dueDate,status==='done')+'</div>'+(prog==null?'':'<div class="gd-progbar"><i style="width:'+prog+'%"></i></div><div class="gd-meta gd-progtx">进度 '+prog+'%</div>')+(r.path?'<div class="gd-path" title="'+esc(r.path)+'">'+esc(r.path)+'</div>':'')+(milestone?'<div class="gd-meta">里程碑 · '+esc(milestone.title)+'</div>':'')+(dep?'<div class="gd-dependency'+(dep.status!=='done'?' is-blocked':'')+'">前置 · '+esc(dep.title)+(dep.status==='done'?'（完成）':'（未完成）')+'</div>':'')+(r.description||r.acceptance?'<details class="gd-expand"><summary>任务说明 / 验收</summary>'+details('说明',r.description)+details('验收',r.acceptance)+'</details>':'')+actions('devTask',r.id,next?'<button class="btn btn-sm" data-gd-advance="devTask" data-id="'+esc(r.id)+'">'+(next==='done'?'完成验收':'移至'+LABELS[next])+'</button>':'')+'</article>';
+        const softs=String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean);
+        const meta='<div class="gd-task-meta">'+(r.stage?'<span class="gd-chip">'+esc(r.stage)+'</span>':'')+softs.map(function(s){return '<span class="gd-soft"><u>'+esc(({Houdini:'H',UE:'U',Blender:'B'})[s] || s.charAt(0))+'</u>'+esc(s)+'</span>';}).join('')+'</div>';
+        const progRow=prog==null?'':'<div class="gd-progrow"><div class="gd-progbar"><i style="width:'+prog+'%"></i></div><span class="gd-progpct">'+prog+'%</span></div>';
+        const pathRow=r.path?'<div class="gd-pathrow"><span class="gd-pathlab">UE</span><code class="gd-path" title="'+esc(r.path)+'">'+esc(r.path)+'</code></div>':'';
+        const extra=(milestone?'<div class="gd-task-extra">里程碑 · '+esc(milestone.title)+'</div>':'')+(dep?'<div class="gd-task-extra gd-dependency'+(dep.status!=='done'?' is-blocked':'')+'">前置 · '+esc(dep.title)+(dep.status==='done'?'（完成）':'（未完成）')+'</div>':'');
+        const nDisc=discCount(r.id);
+        const foot='<div class="gd-task-foot"><button type="button" class="gd-disc-chip" data-gd-disc="devTask" data-id="'+esc(r.id)+'" title="团队讨论">💬'+(nDisc?' '+nDisc:'')+'</button><button type="button" class="gd-card-edit" data-gd-edit="devTask" data-id="'+esc(r.id)+'" title="编辑任务">✏️ 编辑</button></div>';
+        // 交期按目标设计拆两段：日期+交 / 超期红字
+        let dueHtml='';
+        if(r.dueDate){const md=String(r.dueDate).slice(5);
+          const diff=Math.round((new Date(r.dueDate+'T00:00:00')-new Date(D.today()+'T00:00:00'))/86400000);
+          if(status==='done')dueHtml='<span class="gd-due">'+esc(md)+' 交</span>';
+          else if(diff<0)dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due is-overdue">超期 '+(-diff)+' 天</span>';
+          else if(diff===0)dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due is-overdue">0 天</span>';
+          else dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due">剩 '+diff+' 天</span>';}
+        const pri={high:'P1',mid:'P2',low:'P3'}[r.priority] || '';
+        // v2.4.0：卡序对齐目标设计 = 标题+P1 → 阶段+软件 → 负责人·交期·更新 → 进度 → UE路径 → 💬+编辑
+        return '<article class="gd-task" draggable="true" data-gd-task="'+esc(r.id)+'">'
+          + '<div class="gd-task-head"><h4>'+esc(r.title)+'</h4><span class="gd-badge gd-badge--'+esc(r.priority)+'">'+esc(pri)+'</span></div>'
+          + meta
+          + '<div class="gd-ownerline"><button type="button" class="gd-owner" data-gd-owner="'+esc(r.id)+'" title="点击更换负责人"><i class="gd-rdot" style="background:'+esc(role.c)+'"></i><b style="color:'+esc(role.c)+'">'+esc(role.n)+'</b></button>'+dueHtml+fresh+'</div>'
+          + progRow + pathRow + extra
+          + foot
+          + '</article>';
       }).join('')+(!items.length?'<div class="gd-column-empty">暂无任务</div>':'')+'</section>';
     }).join('')+'</div>';
   },
@@ -695,23 +732,91 @@ const GameDev = {
     if(kind==='devTime'&&r.startedAt&&!r.endedAt){App.toast('请先停止计时，再编辑工时');return;}
     const schema=D.DEV_SCHEMA[D.KEYS[kind]];
     let html='';
+    let customTask=false; // v2.4.0：devTask 用目标图四的双列大弹窗（自带底栏）
     if(kind==='devProject')html=field('name','项目名称',r.name,'text','required maxlength="200"')+field('engine','开发工具 / 版本',r.engine || 'UE / Houdini','text','maxlength="200"')+select('status','项目状态',schema.choices.status,r.status || 'active')+field('targetDate','目标交付日期',r.targetDate,'date')+area('description','项目简介 / 范围',r.description,'描述核心玩法、目标平台和当前版本范围')+field('rootPath','工程总路径',r.rootPath,'text','maxlength="300" placeholder="/Game/HuoDong/"')+area('resources','资源链接（一行一条）',r.resources,'格式：图标 名称 | 地址 | 备注　例：📊 排期表 | https://… | 日韩素材排期总表')+area('notes','注意事项（一行一条）',r.notes,'长期有效的规矩　例：Houdini 导出前先 Apply Transform、单位统一 cm')+area('notice','公告',r.notice,'会过期的短期提醒　例：本周目标——档案柜三档先跑通普通档');
     if(kind==='devMilestone')html=field('title','里程碑名称',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'planned')+field('dueDate','截止日期',r.dueDate,'date')+area('description','目标',r.description,'例如：完成可试玩的 10 分钟核心循环')+area('acceptance','交付 / 验收标准',r.acceptance,'明确做到什么程度算完成');
     if(kind==='devTask'){
+      customTask=true;
       const milestones=D.devAll('devMilestone',p.id),tasks=D.devAll('devTask',p.id).filter(t=>t.id!==id);
-      html=field('title','任务名称',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'backlog')+select('category','工作分类',schema.choices.category,r.category || '程序')+select('priority','优先级',schema.choices.priority,r.priority || 'mid')+field('dueDate','截止日期',r.dueDate,'date')+select('milestoneId','所属里程碑',milestones.map(m=>[m.id,m.title]),r.milestoneId,'不关联')+select('dependsOn','前置任务',tasks.map(t=>[t.id,t.title]),r.dependsOn,'无前置任务')+area('description','任务说明',r.description)+area('acceptance','验收标准',r.acceptance,'例如：手柄与键鼠均可完成交互，没有报错')+select('area','分区',[['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']],r.area || 'art')+select('stage','流程阶段',STAGE_LIST,r.stage,'未设置')+field('soft','主要软件',r.soft,'text','maxlength="200" placeholder="Houdini,UE,Blender（逗号分隔）"')+field('path','UE 资源路径',r.path,'text','maxlength="2000" placeholder="/Game/HuoDong/…"')+field('prog','进度 %',r.prog==null?'':r.prog,'number','min="0" max="100" step="5" placeholder="0 - 100"');
+      const dlist=id?(DISCUSS[id]||[]):[];
+      const discBlock='<div class="gd-field gd-full gd-discfield"><span>💬 讨论（'+dlist.length+'）· 讨论留在卡上</span>'
+        +(dlist.length?'<div class="gd-disc-list">'+dlist.map(function(m){return '<p><b>'+esc(roleOf(m.u).n)+'</b> · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p class="gd-disc-x">'+esc(m.x)+'</p>';}).join('')+'</div>':'<p class="gd-note">还没有讨论 · 第一个说什么</p>')
+        +'<div class="gd-disc-row"><input class="input" id="gd-disc-input" placeholder="回复…（支持 @我 @月饼 @邢锦）" maxlength="20000"><button type="button" class="btn btn-primary btn-sm" id="gd-disc-send">发送</button></div></div>';
+      // v2.4.0：一比一对齐目标编辑弹窗 —— 左列文本，右列状态/进度/分区/阶段/软件/路径/讨论
+      html='<div class="gd-ed-grid">'
+        + '<div class="gd-ed-col">'
+        + field('title','资产名称 / 任务名称',r.title,'text','required maxlength="200"')
+        + area('description','📝 任务说明',r.description,'这块可以放开写：要做什么、美术/程序怎么配合、接口边界、注意事项、参考链接…')
+        + area('acceptance','验收标准',r.acceptance,'例如：手柄与键鼠均可完成交互，没有报错')
+        + area('note','备注',r.note,'随手记：临时约定、参考、提醒')
+        + '</div>'
+        + '<div class="gd-ed-col">'
+        + '<div class="gd-ed-pair">'+select('status','状态',schema.choices.status,r.status || 'backlog')+select('owner','负责人',Object.entries(ROLE).map(function(kv){return [kv[0],kv[1].n+'（'+kv[1].r+'）'];}),r.owner||CONFIG.me)+'</div>'
+        + '<div class="gd-ed-pair">'+select('priority','优先级',schema.choices.priority,r.priority || 'mid')+field('dueDate','交付日',r.dueDate,'date')+'</div>'
+        + slider('prog','进度',r.prog==null?0:r.prog)
+        + chipGroup('area','分区',[['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']],r.area || 'art',false)
+        + chipGroup('stage','流程阶段',STAGE_LIST.map(function(s){return [s,s];}),r.stage || '',false)
+        + chipGroup('soft','主要软件',[['Houdini','Houdini'],['UE','UE'],['Blender','Blender']],String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean),true)
+        + field('path','UE 资源路径',r.path,'text','maxlength="2000" placeholder="/Game/HuoDong/…"')
+        + select('dependsOn','前置任务',tasks.map(function(t){return [t.id,t.title];}),r.dependsOn,'无前置任务')
+        + select('milestoneId','所属里程碑',milestones.map(function(m){return [m.id,m.title];}),r.milestoneId,'不关联')
+        + discBlock
+        + '</div></div>';
     }
     if(kind==='devBug')html=field('title','BUG 标题',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'open')+select('severity','严重程度',schema.choices.severity,r.severity || 'medium')+field('environment','环境 / 软件版本',r.environment,'text','maxlength="1000"')+area('steps','复现步骤',r.steps,'1. 打开关卡\n2. 执行操作\n3. 观察结果')+area('expected','预期结果',r.expected)+area('actual','实际结果',r.actual)+area('solution','修复 / 验证记录',r.solution)+'<div class="gd-field gd-full"><span>问题截图（最多 2 张，每张不超过 1 MB）</span><input id="gd-bug-files" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple><div id="gd-bug-previews" class="gd-screenshots"></div><p class="gd-note">截图上传到同一团队私有仓。移除引用保留原文件；本地模拟模式刷新后截图重置。</p></div>';
     if(kind==='devLog')html=field('date','记录日期',r.date || D.today(),'date','required')+area('done','完成 / 进展',r.done,'今天实现了什么？尝试了哪些方案？')+area('blockers','遇到的阻碍',r.blockers,'当前卡在哪里？还需要验证什么？')+area('next','下次继续',r.next,'留下下一次打开项目时的第一步');
     if(kind==='devTime')html=field('date','工作日期',r.date || D.today(),'date','required')+select('category','工作类型',schema.choices.category,r.category || '程序')+field('minutes','耗时（分钟）',r.minutes==null?30:Math.max(.1,Math.round(r.minutes*10)/10),'number','required min="0.1" max="1440" step="0.1"')+area('note','工作说明',r.note)+(r.startedAt?'<p class="gd-note gd-full">编辑后的记录作为手动工时保存，时长精确到 0.1 分钟。</p>':'');
     if(kind==='devAsset')html=field('name','资产名称',r.name,'text','required maxlength="200"')+select('type','资产类型',schema.choices.type,r.type || '模型')+field('dueDate','截止日期',r.dueDate,'date')+field('path','文件 / UE 资源路径',r.path,'text','maxlength="2000"')+area('note','规格 / 备注',r.note,'例如：三角面预算、贴图规格、HDA 输出要求')+'<div class="gd-field gd-full"><span>制作检查清单</span><div id="gd-asset-stages" class="gd-checks"></div><p class="gd-note">检查项目随资产类型调整，保存后也可以在卡片上直接勾选。</p></div>';
-    html=select('owner','负责人 / 工时成员',Object.entries(ROLE).map(([id,r])=>[id,r.n]),r.owner||CONFIG.me)+html;
-    html='<form id="gd-editor" class="gd-form">'+html+'<div class="gd-form-actions gd-full"><button type="button" class="btn" id="gd-editor-cancel">取消</button><button type="submit" class="btn btn-primary" id="gd-editor-save">'+(id?'保存修改':'创建记录')+'</button></div></form>';
-    App.openModal({title:kind==='devProject'?(id?'编辑项目':'新建开发项目'):(id?EDIT_LABELS[kind]:NEW_LABELS[kind]),sub:kind==='devProject'?'项目是六类开发记录的归属。':esc(p.name),width:940,html:html,mount:function(body){
+    if(!customTask)html=select('owner','负责人 / 工时成员',Object.entries(ROLE).map(([id,r])=>[id,r.n]),r.owner||CONFIG.me)+html;
+    const taskFoot=customTask?'<div class="gd-form-actions gd-full gd-ed-foot"><span class="gd-ed-foot-l"><button type="submit" class="btn btn-primary" id="gd-editor-save">📌 更改保存</button><button type="button" class="btn" id="gd-editor-draft" title="草稿自动存本机">📄 有草稿</button></span>'+(id?'<button type="button" class="btn btn-danger" id="gd-editor-del">🗑 删除</button>':'')+'</div>':'';
+    html='<form id="gd-editor" class="gd-form'+(customTask?' gd-form-task':'')+'">'+html+(customTask?taskFoot:'<div class="gd-form-actions gd-full"><button type="button" class="btn" id="gd-editor-cancel">取消</button><button type="submit" class="btn btn-primary" id="gd-editor-save">'+(id?'保存修改':'创建记录')+'</button></div>')+'</form>';
+    App.openModal({title:kind==='devProject'?(id?'编辑项目':'新建开发项目'):(customTask?(id?r.title:NEW_LABELS[kind]):(id?EDIT_LABELS[kind]:NEW_LABELS[kind])),sub:kind==='devProject'?'项目是六类开发记录的归属。':esc(p.name),width:customTask?980:940,html:html,mount:function(body){
       const form=body.querySelector('form'),draftKey=kind+'|'+(id||p?.id||'new');let images=(r.images || []).slice(),loading=false,checks=Object.assign({},r.checks || {});
       const restored=localDrafts[draftKey];if(restored?.__images)images=restored.__images;if(restored?.__checks)checks=restored.__checks;if(restored){form.querySelectorAll('[name]').forEach(el=>{if(restored[el.name]!==undefined)el.value=restored[el.name];});}
       function persistDraft(){const d={__images:images,__checks:checks};form.querySelectorAll('[name]').forEach(el=>{if(!el.name.startsWith('check-'))d[el.name]=el.value;});try{localDrafts[draftKey]=d;saveDrafts();}catch(err){App.toast('本机草稿保存失败，请保留表单');}}body.oninput=persistDraft;
-      body.querySelector('#gd-editor-cancel').onclick=()=>App.closeModal();
+      if(customTask){
+        // v2.4.0：草稿恢复后同步芯片选中态 + 滑条标签
+        if(restored){form.querySelectorAll('.gd-chiprow').forEach(function(row){const hidden=row.querySelector('input[type=hidden]');const vals=(hidden.value||'').split(',').filter(Boolean);row.querySelectorAll('.gd-pick').forEach(function(b){b.classList.toggle('on',vals.indexOf(String(b.dataset.val))>=0);});});const rv=body.querySelector('.gd-slideval'),rg=form.querySelector('[name=prog]');if(rv&&rg)rv.textContent=rg.value+'%';}
+        // 滑条实时 %
+        const range=form.querySelector('[name=prog]');
+        if(range)range.oninput=function(){const sv=body.querySelector('.gd-slideval');if(sv)sv.textContent=range.value+'%';persistDraft();};
+        // 芯片组：单选互斥 / 多选拼接
+        form.querySelectorAll('.gd-chiprow').forEach(function(row){
+          row.addEventListener('click',function(e){
+            const btn=e.target.closest('.gd-pick');if(!btn)return;
+            const hidden=row.querySelector('input[type=hidden]');
+            if(row.dataset.multi){btn.classList.toggle('on');hidden.value=[...row.querySelectorAll('.gd-pick.on')].map(function(b){return b.dataset.val;}).join(',');}
+            else{row.querySelectorAll('.gd-pick').forEach(function(b){b.classList.remove('on');});btn.classList.add('on');hidden.value=btn.dataset.val;}
+            persistDraft();
+          });
+        });
+        // 任务说明字数
+        const desc=form.querySelector('[name=description]');
+        if(desc){const cnt=document.createElement('span');cnt.className='gd-charcount';cnt.textContent=((desc.value||'').length)+' 字';desc.closest('.gd-field').querySelector('span').appendChild(cnt);desc.addEventListener('input',function(){cnt.textContent=((desc.value||'').length)+' 字';});}
+        // 底栏：有草稿 / 删除
+        const draftBtn=body.querySelector('#gd-editor-draft');
+        if(draftBtn)draftBtn.onclick=function(){persistDraft();App.toast('草稿已存本机，下次打开自动恢复');};
+        const delBtn=body.querySelector('#gd-editor-del');
+        if(delBtn)delBtn.onclick=function(){App.closeModal();self.remove('devTask',id);};
+        // 讨论内置：发送即入线程（与卡片 💬 同一份 DISCUSS）
+        const sendBtn=body.querySelector('#gd-disc-send');
+        if(sendBtn)sendBtn.onclick=function(){
+          const inp=body.querySelector('#gd-disc-input');const v=(inp.value||'').trim();if(!v)return;
+          if(!id){App.toast('先保存任务，再发讨论');return;}
+          const before=clone(collectLocal());
+          (DISCUSS[id]=DISCUSS[id]||[]).push({u:CONFIG.me,t:tick(),x:v});log('discuss',id,'开发记录讨论');
+          try{save();inp.value='';
+            const wrap=body.querySelector('.gd-discfield');
+            const cnt=wrap.querySelector('span');cnt.textContent='💬 讨论（'+DISCUSS[id].length+'）· 讨论留在卡上';
+            let list=wrap.querySelector('.gd-disc-list');
+            if(!list){const note=wrap.querySelector('.gd-note');if(note)note.remove();list=document.createElement('div');list.className='gd-disc-list';wrap.insertBefore(list,wrap.querySelector('.gd-disc-row'));}
+            const last=DISCUSS[id][DISCUSS[id].length-1];
+            list.insertAdjacentHTML('beforeend','<p><b>'+esc(roleOf(last.u).n)+'</b> · '+esc(dstr(last.t))+' '+fmtT(last.t)+'</p><p class="gd-disc-x">'+esc(last.x)+'</p>');
+            App.toast('已发送到本机，等待同步');
+          }catch(e){applyState(before);App.toast(e.message,'warn');}
+        };
+      }
+      body.querySelector('#gd-editor-cancel')?.addEventListener('click',()=>App.closeModal());
       function imagePreview(){const node=body.querySelector('#gd-bug-previews');if(!node)return;node.innerHTML=images.map((src,i)=>'<div>'+thumb(src,'问题截图 '+(i+1))+'<button type="button" data-remove-image="'+i+'" class="btn btn-sm">移除</button></div>').join('');hydrateImages(node);}
       if(kind==='devBug'){
         imagePreview();body.querySelector('#gd-bug-previews').onclick=function(e){const b=e.target.closest('[data-remove-image]');if(b&&!loading){images.splice(+b.dataset.removeImage,1);imagePreview();persistDraft();}};
@@ -1196,11 +1301,14 @@ const GameDev = {
 .gd-column { border-radius:16px;border:1px solid var(--line);background:var(--surface-2);padding:12px;min-width:0; }
 .gd-column-title { display:flex;align-items:center;justify-content:space-between;padding:4px 3px 12px;color:var(--muted);font-size:12px; }
 .gd-column-title h3 { font-size:13px;font-weight:600;color:var(--ink);margin:0; }
-.gd-task { background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px; }
+.gd-task { background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px; }
 .gd-task:last-child { margin-bottom:0; }
-.gd-task h4 { font-size:14px;line-height:1.7;font-weight:600;overflow-wrap:anywhere;margin:10px 0 6px; }
-.gd-task .gd-actions { gap:4px; }
+.gd-task-head { display:flex;align-items:flex-start;justify-content:space-between;gap:8px; }
+.gd-task-head h4 { font-size:13.5px;line-height:1.5;font-weight:600;overflow-wrap:anywhere;margin:0; }
+.gd-task-head .gd-badge { flex:none; }
+.gd-task-meta { display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:9px; }
 .gd-task .btn-sm { font-size:11px;padding-inline:8px; }
+.gd-coldot { width:8px;height:8px;border-radius:2.5px;display:inline-block;margin-right:6px;flex:none; }
 .gd-dependency { font-size:11px;color:var(--muted);line-height:1.8;margin-top:8px;overflow-wrap:anywhere; }
 .gd-column-empty { text-align:center;padding:24px 8px;color:var(--muted);font-size:12px; }
 .gd-expand { margin:12px 0;font-size:12px; }
@@ -1292,7 +1400,9 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
 .gd-soft u { width:13px;height:13px;border-radius:3px;display:grid;place-items:center;font-size:8.5px;font-weight:700;text-decoration:none;background:var(--soft,rgba(102,126,234,.12)); }
 .gd-owner { margin-left:auto;font-size:10.5px;color:var(--accent);background:none;border:0;border-bottom:1px dashed var(--card-border);cursor:pointer;padding:0 1px;font-family:inherit; }
 .gd-owner:hover { border-bottom-color:var(--accent); }
-.gd-path { font-size:10.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:2px 0 4px; }
+.gd-pathrow { display:flex;align-items:center;gap:6px;min-width:0;margin-top:9px; }
+.gd-pathlab { font-size:9.5px;color:var(--muted);border:1px solid var(--card-border);border-radius:4px;padding:0 4px;line-height:1.7;flex:none; }
+.gd-path { flex:1;min-width:0;font-size:10.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:6px;padding:2px 8px; }
 .gd-owner-pick { display:flex;flex-wrap:wrap;gap:8px; }
 /* ================= v2.3 顶部区：一行 KPI / 分区 / 流程阶段 / 软件 ================= */
 .gd-kpibar { display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;margin:0 0 12px;border-top:1px solid var(--line);padding-top:10px;font-size:12px;color:var(--muted);line-height:1.9; }
@@ -1319,12 +1429,44 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
 .gd-step.on i { background:var(--brand); }
 .gd-step em { font-style:normal;color:var(--muted);font-size:10px; }
 /* ---- 卡片 v2.3：负责人圆点 / 进度条 / 刚改过 ---- */
-.gd-ownerline { justify-content:flex-start;gap:6px; }
+.gd-ownerline { justify-content:flex-start;gap:6px;margin-top:10px;align-items:center; }
 .gd-owner { margin-left:0;display:inline-flex;align-items:center;gap:5px; }
 .gd-owner b { font-weight:600; }
 .gd-rdot { width:7px;height:7px;border-radius:50%;flex:none;display:inline-block; }
-.gd-cat { color:var(--muted); }
-.gd-fresh { color:#ef4444;font-size:10.5px;border:1px solid currentColor;border-radius:5px;padding:0 5px;line-height:1.6; }
+.gd-duewrap { display:inline-flex;align-items:center;gap:6px; }
+.gd-fresh { margin-left:auto;color:var(--muted);font-size:10.5px;white-space:nowrap; }
+.gd-progrow { display:flex;align-items:center;gap:8px;margin-top:10px; }
+.gd-progrow .gd-progbar { flex:1;margin:0; }
+.gd-progpct { font-size:10.5px;color:var(--muted);min-width:34px;text-align:right;font-variant-numeric:tabular-nums;flex:none; }
+.gd-task-extra { font-size:10.5px;color:var(--muted);margin-top:7px;overflow-wrap:anywhere; }
+.gd-task-foot { display:flex;align-items:center;gap:10px;margin-top:10px;padding-top:9px;border-top:1px dashed var(--card-border); }
+.gd-disc-chip { background:none;border:0;color:var(--muted);font-size:11.5px;cursor:pointer;padding:0;font-family:inherit; }
+.gd-disc-chip:hover { color:var(--accent); }
+.gd-card-edit { margin-left:auto;background:none;border:1px solid var(--card-border);border-radius:7px;color:var(--muted);font-size:10.5px;padding:3px 9px;cursor:pointer;white-space:nowrap;font-family:inherit; }
+.gd-card-edit:hover { color:var(--accent);border-color:var(--accent); }
+/* ---- v2.4.0 任务编辑大弹窗（目标图四）---- */
+.gd-form-task { grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:14px;align-items:start; }
+.gd-ed-grid { display:contents; }
+.gd-ed-col { display:flex;flex-direction:column;gap:14px;min-width:0; }
+.gd-ed-col .gd-field.gd-full { grid-column:auto; }
+.gd-ed-pair { display:grid;grid-template-columns:1fr 1fr;gap:10px; }
+.gd-sliderfield input[type=range] { width:100%;accent-color:var(--brand);margin:6px 0 2px; }
+.gd-slideval { color:var(--ink);font-variant-numeric:tabular-nums; }
+.gd-chiprow { display:flex;flex-wrap:wrap;gap:8px; }
+.gd-pick { border:1px solid var(--card-border);background:var(--card-bg);color:var(--muted);border-radius:999px;padding:5px 13px;font-size:11.5px;cursor:pointer;font-family:inherit;white-space:nowrap; }
+.gd-pick:hover { color:var(--ink); }
+.gd-pick.on { color:var(--accent);border-color:var(--accent);background:var(--soft,rgba(102,126,234,.12));font-weight:600; }
+.gd-discfield .gd-note { margin:2px 0; }
+.gd-disc-list { max-height:180px;overflow:auto;display:flex;flex-direction:column;gap:8px;border:1px solid var(--card-border);border-radius:8px;padding:8px 10px;background:var(--card-bg-2); }
+.gd-disc-list p { margin:0;font-size:11.5px; }
+.gd-disc-x { white-space:pre-wrap;color:var(--ink); }
+.gd-disc-row { display:flex;gap:8px; }
+.gd-disc-row .input { flex:1;min-width:0; }
+.gd-ed-foot { justify-content:space-between; }
+.gd-ed-foot-l { display:inline-flex;gap:8px; }
+.btn-danger { color:var(--danger);border-color:var(--danger);background:none; }
+.btn-danger:hover { background:var(--danger);color:#fff; }
+.gd-charcount { margin-left:auto;color:var(--muted);font-weight:400;font-size:10.5px; }
 .gd-progbar { height:5px;border-radius:8px;background:var(--surface-3);overflow:hidden;margin:8px 0 4px; }
 .gd-progbar i { display:block;height:100%;background:var(--brand);border-radius:inherit; }
 .gd-progtx { font-size:10.5px; }
@@ -1357,6 +1499,8 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .gd-project-bar { flex-wrap:wrap;gap:8px;width:100%; }
   .gd-project-bar select { flex:1 1 140px;max-width:none; }
   .gd-project-card { padding:12px; }
+  .gd-form-task { grid-template-columns:1fr; }
+  .gd-ed-pair { grid-template-columns:1fr 1fr; }
   .gd-kpis { grid-template-columns:repeat(2,minmax(0,1fr));gap:14px; }
   .gd-kpi strong { font-size:22px; }
   .gd-tabs { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
