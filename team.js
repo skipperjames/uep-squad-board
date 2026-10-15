@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.4.3-20261015
+   team.js —— UE 团队看板「植入工具」  v2.4.4-20261015
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.4.3-20261015'; // @提醒闭环：讨论 @名字 → 对方顶栏 🔔 未读数 + 提醒面板（可跳卡）+ 拉取时 toast
+  const VERSION = 'v2.4.4-20261015'; // 修×关不掉（beforeClose 只有显式 false 才否决+异常不拦关闭）；成员名去硬编码（只活在 ROLE，全链路 MENTION_HINT/MENTION_RE 派生）
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -61,6 +61,9 @@
     a:  { n: '月饼', c: '#34d399', r: '程序' },
     b:  { n: '邢锦', c: '#e879f9', r: '美术TA' }
   };
+  /* v2.4.4：成员名字只准活在这里 —— 全代码其余地方一律用派生变量，改名字只动这一行 */
+  const MENTION_HINT = '@' + Object.values(ROLE).map(function(r){return r.n;}).join(' @');
+  const MENTION_RE = new RegExp('@(' + Object.values(ROLE).map(function(n){return n.n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');}).join('|') + ')', 'g');
   const SYNC_PREFIX = 'niko_team_';
 
   let CONFIG = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -309,7 +312,7 @@
     DevModal.openModal({title:'🔔 @我的提醒',html:(list.length?'<div class="ment-list">'+list.map(function(m){
       const title=findDevTitle(m.cid);
       return '<div class="ment-i"><p><b>'+esc(roleOf(m.by).n)+'</b> 在「'+esc(title||'已删除的卡片')+'」@了你 · <span class="tm">'+esc(dstr(m.t))+' '+fmtT(m.t)+'</span></p><p class="ment-x">'+esc(m.x)+'</p>'+(m.cid?'<button type="button" class="btn btn-sm" data-ment-jump="'+esc(m.cid)+'">跳到那张卡 →</button>':'')+'</div>';
-    }).join('')+'</div>'+cardBtn:'<div class="mut" style="text-align:center;padding:24px 0">还没有人 @你 · 在讨论里输入 @月饼 / @邢锦 / @我 就能提醒对方</div>'),mount:function(body){
+    }).join('')+'</div>'+cardBtn:'<div class="mut" style="text-align:center;padding:24px 0">还没有人 @你 · 在讨论里输入 '+esc(MENTION_HINT)+' 就能提醒对方</div>'),mount:function(body){
       body.onclick=function(e){
         const j=e.target.closest('[data-ment-jump]');
         if(j){const cid=j.dataset.mentJump;let t=null,isTask=false;Object.values(DEV_KEYS).forEach(function(k){const r=(DEV[k]||[]).find(x=>x.id===cid);if(r){t=r;isTask=(k==='devTasks');}});writeSeen(now());updateBell();App.closeModal();
@@ -810,7 +813,7 @@ const GameDev = {
       const dlist=id?(DISCUSS[id]||[]):[];
       const discBlock='<div class="gd-field gd-full gd-discfield"><span>💬 讨论（'+dlist.length+'）· 讨论留在卡上</span>'
         +(dlist.length?'<div class="gd-disc-list">'+dlist.map(function(m){return '<p><b>'+esc(roleOf(m.u).n)+'</b> · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p class="gd-disc-x">'+esc(m.x)+'</p>';}).join('')+'</div>':'<p class="gd-note">还没有讨论 · 第一个说什么</p>')
-        +'<div class="gd-disc-row"><input class="input" id="gd-disc-input" placeholder="回复…（支持 @我 @月饼 @邢锦）" maxlength="20000"><button type="button" class="btn btn-primary btn-sm" id="gd-disc-send">发送</button></div></div>';
+        +'<div class="gd-disc-row"><input class="input" id="gd-disc-input" placeholder="回复…（'+esc(MENTION_HINT)+'）" maxlength="20000"><button type="button" class="btn btn-primary btn-sm" id="gd-disc-send">发送</button></div></div>';
       // v2.4.0：一比一对齐目标编辑弹窗 —— 左列文本，右列状态/进度/分区/阶段/软件/路径/讨论
       html='<div class="gd-ed-grid">'
         + '<div class="gd-ed-col">'
@@ -1980,11 +1983,11 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
       <div class="disc" id="discList">
         ${(DISCUSS[a.id] || []).map(d => `<div class="disc-i">${av(d.u, 22)}
           <div class="disc-b"><div class="disc-h"><b>${roleOf(d.u).n}</b><span class="tm">${fmtT(d.t)}</span></div>
-          <div class="disc-t">${esc(d.x).replace(/@(我|月饼|邢锦)/g, '<span class="at">@$1</span>')}</div></div></div>`).join('')
+          <div class="disc-t">${esc(d.x).replace(MENTION_RE, '<span class="at">@$1</span>')}</div></div></div>`).join('')
         || '<div class="tiny mut">还没有讨论 · 第一个说点什么</div>'}
       </div>
       <div class="row" style="gap:6px;margin-top:8px">
-        <input type="text" id="discInput" placeholder="回复…（支持 @我 @月饼 @邢锦）" style="flex:1">
+        <input type="text" id="discInput" placeholder="回复…（${esc(MENTION_HINT)}）" style="flex:1">
         <button class="btn pri" id="discSend">发送</button>
       </div>`;
     root.querySelector('#dFoot').innerHTML = `
@@ -2059,7 +2062,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     log('discuss', id, `讨论：${v.slice(0, 20)}`);
     const at = notifyMentions(v, id);
     if (at.length) toast(`📨 已提醒 ${at.join('、')}`);
-    else if (/@[^\s]/.test(v)) toast(`⚠️ @ 的名字没匹配到成员（可用：@我 @月饼 @邢锦）`, 'warn');
+    else if (/@[^\s]/.test(v)) toast(`⚠️ @ 的名字没匹配到成员（可用：${MENTION_HINT}）`, 'warn');
     save(); render(); updateBell(); openDrawer(id, true);
   }
   function saveDraft(a) {
@@ -2339,7 +2342,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), undoFn ? 4200 : 2400);
   }
   function openModal(cls) {const m=root.querySelector('.'+cls);if(m){modalReturn=root.activeElement;m.classList.add('show');m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');m.setAttribute('aria-label',root.querySelector('#gmTitle')?.textContent||'对话框');setTimeout(()=>m.querySelector('input,button,select,textarea')?.focus(),0);}}
-  function closeModal(cls) {if(cls==='genericModal'&&modalOptions?.beforeClose&&!modalOptions.beforeClose())return;const m=root.querySelector('.'+cls);if(m)m.classList.remove('show');if(cls==='genericModal'){modalOptions=null;const box=root.querySelector('#gmBody');box.oninput=null;box.onclick=null;}modalReturn?.focus?.();if(pendingPush&&!syncing){pendingPush=false;scheduleSync();}}
+  function closeModal(cls) {if(cls==='genericModal'&&modalOptions&&typeof modalOptions.beforeClose==='function'){let ok=true;try{ok=modalOptions.beforeClose();}catch(e){ok=true;}if(ok===false)return;}const m=root.querySelector('.'+cls);if(m)m.classList.remove('show');if(cls==='genericModal'){modalOptions=null;const box=root.querySelector('#gmBody');box.oninput=null;box.onclick=null;}modalReturn?.focus?.();if(pendingPush&&!syncing){pendingPush=false;scheduleSync();}}
   /* 页面内确认框（2026-10-13 替代原生 confirm —— 原生弹窗又丑、手机端还容易被拦）
      ⚠️ 原生 confirm 是同步的，这里换成异步 ⇒ 调用方必须把「确认后要做的事」写成 then 回调 */
   function askConfirm(opt) {
@@ -2413,6 +2416,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     /* 模拟「别人正在编辑」锁（24） */
     setLock(cardId, by) { if (by) LOCKED[cardId] = { by, at: now() }; else delete LOCKED[cardId]; render(); return api; },
     _autoNextMs() { return nextAutoMs; },   // v2.4.2 测试钩子：当前自适应轮询间隔
+    get _ROLE() { return ROLE; },           // v2.4.4 测试钩子：成员表（名字改了测试自动跟随，不再硬编码）
     on,
     mount(sel) {
       hostEl = typeof sel === 'string' ? document.querySelector(sel) : sel;
