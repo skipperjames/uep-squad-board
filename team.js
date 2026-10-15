@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.4.2-20261015
+   team.js —— UE 团队看板「植入工具」  v2.4.3-20261015
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.4.2-20261015'; // 轮询自适应：有人正在编辑(有锁)→5s，平时 20s（保 token 配额）
+  const VERSION = 'v2.4.3-20261015'; // @提醒闭环：讨论 @名字 → 对方顶栏 🔔 未读数 + 提醒面板（可跳卡）+ 拉取时 toast
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -268,6 +268,57 @@
     DEV[key]=DEV[key].map((x,xi)=>xi===i?r:x);
     try{save();}catch(e){applyState(before);}
   }
+  /* ---------- v2.4.3 @提醒：讨论里 @到谁，谁顶栏 🔔 出红点，被拉取时 toast ---------- */
+  function readSeen(){try{return Number(localStorage.getItem(SYNC_PREFIX+'mseen_'+CONFIG.me))||0;}catch(e){return 0;}}
+  function writeSeen(v){try{localStorage.setItem(SYNC_PREFIX+'mseen_'+CONFIG.me,String(v));}catch(e){}}
+  function myMentions(){const M=EXTRA.mentions||{};return M[CONFIG.me]||[];}
+  function unreadMentions(){return myMentions().filter(m=>(m.t||0)>readSeen());}
+  function findDevTitle(cid){for(const k of Object.values(DEV_KEYS)){const r=(DEV[k]||[]).find(x=>x.id===cid);if(r)return r.title||r.name||r.date||'';}return '';}
+  // 发送讨论时调用：解析 @名字 → 写进对方提醒列表；返回被提醒的名字数组
+  function notifyMentions(text,cardId){
+    const ms=String(text||'').match(/@([^\s@，。,、]+)/g)||[];
+    const hit=new Set();
+    ms.forEach(function(m){const name=m.slice(1);Object.entries(ROLE).forEach(function(kv){if(kv[1].n===name&&kv[0]!==CONFIG.me)hit.add(kv[0]);});});
+    if(!hit.size)return [];
+    const M=(EXTRA.mentions=EXTRA.mentions||{});
+    const added=[];
+    hit.forEach(function(k){M[k]=M[k]||[];M[k].push({t:now(),by:CONFIG.me,cid:cardId||'',x:String(text).slice(0,140)});if(M[k].length>30)M[k].shift();added.push(ROLE[k].n);});
+    return added;
+  }
+  // 拉取后检查新到提醒（每人每次会话只 toast 增量）
+  let lastMentToast=0;
+  function pingMentions(){
+    const fresh=myMentions().filter(m=>(m.t||0)>readSeen()&&(m.t||0)>lastMentToast&&m.by&&m.by!==CONFIG.me);
+    if(!fresh.length)return;
+    lastMentToast=Math.max.apply(null,fresh.map(m=>m.t||0));
+    const last=fresh[fresh.length-1];
+    toast('💬 '+roleOf(last.by).n+' @了你'+(fresh.length>1?'（'+fresh.length+' 条新提醒）':''),8000);
+    updateBell();
+  }
+  function updateBell(){
+    const btn=root&&root.querySelector('#devMentions');if(!btn)return;
+    const n=unreadMentions().length;
+    const txt=btn.querySelector('.stxt');
+    if(txt)txt.textContent=n?'🔔 '+n:'🔔';
+    btn.classList.toggle('has-unread',n>0);
+  }
+  function showMentions(){
+    const list=myMentions().slice().reverse();
+    writeSeen(now());updateBell();
+    const cardBtn=list.length?'<button class="btn" id="mentClearAll">全部标为已读</button>':'';
+    DevModal.openModal({title:'🔔 @我的提醒',html:(list.length?'<div class="ment-list">'+list.map(function(m){
+      const title=findDevTitle(m.cid);
+      return '<div class="ment-i"><p><b>'+esc(roleOf(m.by).n)+'</b> 在「'+esc(title||'已删除的卡片')+'」@了你 · <span class="tm">'+esc(dstr(m.t))+' '+fmtT(m.t)+'</span></p><p class="ment-x">'+esc(m.x)+'</p>'+(m.cid?'<button type="button" class="btn btn-sm" data-ment-jump="'+esc(m.cid)+'">跳到那张卡 →</button>':'')+'</div>';
+    }).join('')+'</div>'+cardBtn:'<div class="mut" style="text-align:center;padding:24px 0">还没有人 @你 · 在讨论里输入 @月饼 / @邢锦 / @我 就能提醒对方</div>'),mount:function(body){
+      body.onclick=function(e){
+        const j=e.target.closest('[data-ment-jump]');
+        if(j){const cid=j.dataset.mentJump;let t=null,isTask=false;Object.values(DEV_KEYS).forEach(function(k){const r=(DEV[k]||[]).find(x=>x.id===cid);if(r){t=r;isTask=(k==='devTasks');}});writeSeen(now());updateBell();App.closeModal();
+          if(t&&isTask){if(!GameDev.project()||(t.projectId&&GameDev.project().id!==t.projectId)){GameDev._project=t.projectId;GameDev.resetFilters();}GameDev.chooseTab('devTask');GameDev.openEditor('devTask',cid);}
+          return;}
+        if(e.target.closest('#mentClearAll')){writeSeen(now());updateBell();App.closeModal();toast('已全部标为已读');}
+      };
+    }});
+  }
   function devRemove(kind,id) {
     if(kind==='devProject')throw Error('项目请改为归档，以保留关联历史');
     const key=DEV_KEYS[kind],r=DEV[key]?.find(x=>x.id===id);if(!r)return;
@@ -337,7 +388,7 @@
     const key='discussion|'+id;
     DevModal.openModal({title:'团队讨论 · '+(record.title||record.name||record.date),html:'<div class="disc">'+(DISCUSS[id]||[]).map(m=>'<p><b>'+esc(roleOf(m.u).n)+'</b> · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p style="white-space:pre-wrap">'+esc(m.x)+'</p>').join('')+'</div><form id="dev-disc-form" class="gd-form"><label class="gd-field gd-full"><span>发送给团队</span><textarea name="discussion" maxlength="20000">'+esc(localDrafts[key]||'')+'</textarea></label><button class="btn pri" type="submit">发送</button></form>',mount:body=>{
       const form=body.querySelector('form'),input=form.querySelector('textarea');input.oninput=()=>{try{localDrafts[key]=input.value;saveDrafts();}catch(e){toast('草稿保存失败','warn');}};
-      form.onsubmit=e=>{e.preventDefault();if(!input.value.trim())return;const before=clone(collectLocal());(DISCUSS[id]=DISCUSS[id]||[]).push({u:CONFIG.me,t:tick(),x:input.value.trim()});log('discuss',id,'开发记录讨论');try{save();delete localDrafts[key];try{saveDrafts();}catch(e){}DevModal.closeModal();render();toast('已发送到本机，等待同步');}catch(e){applyState(before);toast(e.message,'warn');}};
+      form.onsubmit=e=>{e.preventDefault();if(!input.value.trim())return;const before=clone(collectLocal());(DISCUSS[id]=DISCUSS[id]||[]).push({u:CONFIG.me,t:tick(),x:input.value.trim()});log('discuss',id,'开发记录讨论');const at=notifyMentions(input.value.trim(),id);try{save();delete localDrafts[key];try{saveDrafts();}catch(e){}DevModal.closeModal();render();updateBell();toast(at.length?'📨 已提醒 '+at.join('、'):'已发送到本机，等待同步');}catch(e){applyState(before);toast(e.message,'warn');}};
     }});
   }
   const DevModal={toast:msg=>toast(msg,'warn'),closeModal:()=>closeModal('genericModal'),openModal(opt){
@@ -790,7 +841,7 @@ const GameDev = {
     html='<form id="gd-editor" class="gd-form'+(customTask?' gd-form-task':'')+'">'+html+(customTask?taskFoot:'<div class="gd-form-actions gd-full"><button type="button" class="btn" id="gd-editor-cancel">取消</button><button type="submit" class="btn btn-primary" id="gd-editor-save">'+(id?'保存修改':'创建记录')+'</button></div>')+'</form>';
     // v2.4.1：编辑锁 —— 打开即锁 + 4 分钟续期；任何关闭路径（X/保存/删除/Esc）都解锁
     let lockTimer=null;
-    const releaseLock=()=>{if(lockTimer){clearInterval(lockTimer);lockTimer=null;}if(kind==='devTask'&&id){try{devLock(id,false);}catch(e){}}};
+    const releaseLock=()=>{if(lockTimer){clearInterval(lockTimer);lockTimer=null;}if(kind==='devTask'&&id){try{devLock(id,false);}catch(e){}}return true;}; // 必须返回 true：beforeClose 约定 false=否决，undefined 会被 !v 误判成否决
     const modalOpt={title:kind==='devProject'?(id?'编辑项目':'新建开发项目'):(customTask?(id?r.title:NEW_LABELS[kind]):(id?EDIT_LABELS[kind]:NEW_LABELS[kind])),sub:kind==='devProject'?'项目是六类开发记录的归属。':esc(p.name),width:customTask?980:940,html:html,beforeClose:releaseLock,mount:function(body){
       const form=body.querySelector('form'),draftKey=kind+'|'+(id||p?.id||'new');let images=(r.images || []).slice(),loading=false,checks=Object.assign({},r.checks || {});
       const restored=localDrafts[draftKey];if(restored?.__images)images=restored.__images;if(restored?.__checks)checks=restored.__checks;if(restored){form.querySelectorAll('[name]').forEach(el=>{if(restored[el.name]!==undefined)el.value=restored[el.name];});}
@@ -821,13 +872,14 @@ const GameDev = {
         if(draftBtn)draftBtn.onclick=function(){persistDraft();App.toast('草稿已存本机，下次打开自动恢复');};
         const delBtn=body.querySelector('#gd-editor-del');
         if(delBtn)delBtn.onclick=function(){App.closeModal();self.remove('devTask',id);};
-        // 讨论内置：发送即入线程（与卡片 💬 同一份 DISCUSS）
+        // 讨论内置：发送即入线程（与卡片 💬 同一份 DISCUSS）+ @提醒
         const sendBtn=body.querySelector('#gd-disc-send');
         if(sendBtn)sendBtn.onclick=function(){
           const inp=body.querySelector('#gd-disc-input');const v=(inp.value||'').trim();if(!v)return;
           if(!id){App.toast('先保存任务，再发讨论');return;}
           const before=clone(collectLocal());
           (DISCUSS[id]=DISCUSS[id]||[]).push({u:CONFIG.me,t:tick(),x:v});log('discuss',id,'开发记录讨论');
+          let at=[];try{at=notifyMentions(v,id);}catch(err){at=[];}
           try{save();inp.value='';
             const wrap=body.querySelector('.gd-discfield');
             const cnt=wrap.querySelector('span');cnt.textContent='💬 讨论（'+DISCUSS[id].length+'）· 讨论留在卡上';
@@ -835,7 +887,7 @@ const GameDev = {
             if(!list){const note=wrap.querySelector('.gd-note');if(note)note.remove();list=document.createElement('div');list.className='gd-disc-list';wrap.insertBefore(list,wrap.querySelector('.gd-disc-row'));}
             const last=DISCUSS[id][DISCUSS[id].length-1];
             list.insertAdjacentHTML('beforeend','<p><b>'+esc(roleOf(last.u).n)+'</b> · '+esc(dstr(last.t))+' '+fmtT(last.t)+'</p><p class="gd-disc-x">'+esc(last.x)+'</p>');
-            App.toast('已发送到本机，等待同步');
+            updateBell();App.toast(at.length?'📨 已提醒 '+at.join('、'):'已发送到本机，等待同步');
           }catch(e){applyState(before);App.toast(e.message,'warn');}
         };
       }
@@ -882,9 +934,9 @@ const GameDev = {
     if(MODE==='legacy'){if(GameDev._clock)clearInterval(GameDev._clock);renderLegacy();return;}
     root.querySelector('.t-root').dataset.th=curTheme();
     const surf=root.querySelector('.surface'),active=root.activeElement,search=active?.id==='gd-search',pos=active?.selectionStart;
-    surf.innerHTML='<div class="top"><div class="brand">🎮 UE 团队开发 <small>'+VERSION+'</small></div><div class="spacer"></div><div class="topset" id="devTopSet"><button class="gb gb-set" id="devSetToggle" aria-expanded="false">⚙️ 设置 <span class="cs">▾</span></button><div class="topset-panel"><label>我是谁 <select id="devMe">'+Object.entries(ROLE).map(([k,r])=>'<option value="'+esc(k)+'" '+(k===CONFIG.me?'selected':'')+'>'+esc(r.n)+'</option>').join('')+'</select></label><button class="gb" id="legacyMode">旧看板 · '+DATA.length+'</button><button class="gb" id="devTrash">回收站</button><button class="gb" id="devLogHistory">团队历史</button><button class="gb" id="devSync">同步设置</button><p class="topset-note">只设一次，之后本机记住 —— 所以默认收起。</p></div></div><button class="syncdot" id="devPull"><i></i><span class="stxt"></span></button></div>'+conflictBanner()+'<div class="gd-root">'+GameDev.body()+'</div>';
+    surf.innerHTML='<div class="top"><div class="brand">🎮 UE 团队开发 <small>'+VERSION+'</small></div><div class="spacer"></div><div class="topset" id="devTopSet"><button class="gb gb-set" id="devSetToggle" aria-expanded="false">⚙️ 设置 <span class="cs">▾</span></button><div class="topset-panel"><label>我是谁 <select id="devMe">'+Object.entries(ROLE).map(([k,r])=>'<option value="'+esc(k)+'" '+(k===CONFIG.me?'selected':'')+'>'+esc(r.n)+'</option>').join('')+'</select></label><button class="gb" id="legacyMode">旧看板 · '+DATA.length+'</button><button class="gb" id="devTrash">回收站</button><button class="gb" id="devLogHistory">团队历史</button><button class="gb" id="devSync">同步设置</button><p class="topset-note">只设一次，之后本机记住 —— 所以默认收起。</p></div></div><button class="syncdot" id="devMentions" title="@我的提醒">🔔<span class="stxt"></span></button><button class="syncdot" id="devPull"><i></i><span class="stxt"></span></button></div>'+conflictBanner()+'<div class="gd-root">'+GameDev.body()+'</div>';
     GameDev._box=surf.querySelector('.gd-root');GameDev.bind(GameDev._box);hydrateImages();
-    root.querySelector('#legacyMode').onclick=()=>{MODE='legacy';render();};root.querySelector('#devTrash').onclick=showDevTrash;root.querySelector('#devLogHistory').onclick=showReplay;root.querySelector('#devSync').onclick=showSyncPanel;root.querySelector('#devPull').onclick=()=>pull();
+    root.querySelector('#legacyMode').onclick=()=>{MODE='legacy';render();};root.querySelector('#devTrash').onclick=showDevTrash;root.querySelector('#devLogHistory').onclick=showReplay;root.querySelector('#devSync').onclick=showSyncPanel;root.querySelector('#devPull').onclick=()=>pull();root.querySelector('#devMentions').onclick=showMentions;updateBell();
     const setBox=root.querySelector('#devTopSet'),setBtn=root.querySelector('#devSetToggle');
     if(setBtn)setBtn.onclick=e=>{e.stopPropagation();const on=setBox.classList.toggle('open');setBtn.setAttribute('aria-expanded',on?'true':'false');};
     if(setBox)surf.querySelector('.top').addEventListener('click',e=>{if(!e.target.closest('#devTopSet')){setBox.classList.remove('open');setBtn&&setBtn.setAttribute('aria-expanded','false');}});
@@ -1025,7 +1077,7 @@ const GameDev = {
   function setDot(state, txt) {
     syncStatus=[state,txt];
     if (!root) return;
-    const dot = root.querySelector('.syncdot'); if (!dot) return;
+    const dot = root.querySelector('#devPull'); if (!dot) return;   // v2.4.3：精准指向同步灯（.syncdot 第一个已是 🔔）
     const i = dot.querySelector('i');
     if (i) i.style.background = state === 'ok' ? '#10b981' : state === 'busy' ? '#f59e0b' : state === 'err' ? '#ef4444' : '#888';
     const t = dot.querySelector('.stxt'); if (t) t.textContent = txt;
@@ -1074,7 +1126,7 @@ const GameDev = {
     try{
       const cur=await ghGet();
       if(!cur.data){setDot('warn','未找到数据库 · 检查仓库或权限');return;}
-      const merged=computeMerge(collectLocal(),cur.data);applyState(merged);cacheBase(cur.data);saveLocal();render();
+      const merged=computeMerge(collectLocal(),cur.data);applyState(merged);cacheBase(cur.data);saveLocal();render();updateBell();pingMentions();
       setDot(CONFLICTS.length?'err':'ok',CONFLICTS.length?'字段冲突待处理':'已同步 · '+fmtT(now()));emit('pull',{count:totalRecords()});
     }catch(e){setDot('err','拉取失败 · 保留本机');emit('pull-error',{error:String(e)});}
     finally{syncing=false;if(pendingPush&&!CONFLICTS.length){pendingPush=false;scheduleSync();}}
@@ -1174,6 +1226,12 @@ const GameDev = {
   .gb:disabled{opacity:.45;cursor:not-allowed}
   .syncdot{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);padding:3px 9px;border-radius:6px;border:1px solid var(--card-border);cursor:pointer;background:var(--card-bg-2)}
   .syncdot i{width:8px;height:8px;border-radius:50%;background:#888;display:block}
+  #devMentions.has-unread{color:#f59e0b;border-color:#f59e0b;font-weight:600}
+  .ment-list{display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow:auto}
+  .ment-i{border:1px solid var(--card-border);border-radius:10px;padding:10px 12px;background:var(--card-bg-2)}
+  .ment-i p{margin:0 0 6px;font-size:12px;line-height:1.7}
+  .ment-i .tm{color:var(--muted);font-size:11px}
+  .ment-x{white-space:pre-wrap;color:var(--ink);background:var(--surface-3);border-radius:8px;padding:7px 10px}
   .kpibar{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:1px;background:var(--card-border);border-bottom:1px solid var(--card-border)}
   .kpi{background:var(--card-bg);padding:8px 13px;cursor:pointer}
   .kpi:hover{background:var(--card-bg-2)}
@@ -1999,9 +2057,10 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     snapshot();
     (DISCUSS[id] = DISCUSS[id] || []).push({ u: CONFIG.me, t: now(), x: v });
     log('discuss', id, `讨论：${v.slice(0, 20)}`);
-    const m = v.match(/@(我|月饼|邢锦)/g);
-    if (m) toast(`📨 已在讨论里 @ ${m.join('、')}，对方会收到提醒`);   // 27 @我提醒
-    save(); render(); openDrawer(id, true);
+    const at = notifyMentions(v, id);
+    if (at.length) toast(`📨 已提醒 ${at.join('、')}`);
+    else if (/@[^\s]/.test(v)) toast(`⚠️ @ 的名字没匹配到成员（可用：@我 @月饼 @邢锦）`, 'warn');
+    save(); render(); updateBell(); openDrawer(id, true);
   }
   function saveDraft(a) {
     snapshot();
