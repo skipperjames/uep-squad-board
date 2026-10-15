@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.5.1-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
+  const VERSION = 'v2.6.0-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -127,7 +127,7 @@
   const DEV_SCHEMA = {
     devProjects:{choices:{status:['active','paused','released','archived']}},
     devMilestones:{choices:{status:['planned','active','done']}},
-    devTasks:{choices:{status:['backlog','doing','review','done'],category:['玩法','程序','美术','技术美术','音频','测试','其他'],priority:['high','mid','low']}},
+    devTasks:{choices:{status:['backlog','doing','review','done'],category:['玩法','程序','美术','技术美术','音频','测试','其他'],priority:['critical','high','mid','low']}},
     devBugs:{choices:{status:['open','fixing','verify','closed'],severity:['critical','high','medium','low']}},
     devLogs:{choices:{}},devTimes:{choices:{category:['程序','美术','技术美术','设计','调试','学习','其他']}},
     devAssets:{choices:{type:['模型','材质','动画','特效','HDA','场景','音频','其他']}}
@@ -510,7 +510,9 @@ function actions(kind,id,extra) {
       if(dd <= 2) return '<span class="tk-due soon">'+dd+' 天后</span>';
       return '<span class="tk-due ok">'+dd+' 天后</span>';
     },
-    pri(t){ return {high:'P1',mid:'P2',low:'P3'}[t.priority] || 'P2'; },
+    /* v2.6.0：优先级统一成 P0–P3 四级（critical/high/mid/low），板/表/详情/编辑器用同一套说法 */
+    pri(t){ return {critical:'P0',high:'P1',mid:'P2',low:'P3'}[t.priority] || 'P2'; },
+    PRI4: [['critical','P0 阻断'],['high','P1 高'],['mid','P2 中'],['low','P3 低']],
     av(id){ const r = ROLE[id] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'}; return '<i class="tk-av" title="'+esc(r.n)+'" style="background:'+esc(r.c)+'">'+esc(String(r.n).slice(0,1))+'</i>'; },
     ownerName(id){ const r = ROLE[id] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'}; return r.n; },
     bar(v,c){ return '<div style="flex:1 1 auto;height:5px;border-radius:3px;background:var(--card-border);overflow:hidden"><i style="display:block;height:100%;border-radius:3px;width:'+Math.max(0,Math.min(100,v||0))+'%;background:'+(c||'var(--accent)')+'"></i></div>'; },
@@ -602,13 +604,35 @@ function actions(kind,id,extra) {
           sub.forEach(t=>{
             const dep = t.dependsOn ? this.find(all, t.dependsOn) : null;
             const blocked = dep && dep.status !== 'done';
-            s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+'" draggable="true" data-tk-card="'+esc(t.id)+'" data-tk-open="'+esc(t.id)+'">'
-              + '<div style="display:flex;gap:5px;align-items:baseline"><span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span></div>'
-              + (dep?'<div class="tk-wait">⛓ 等「'+esc(dep.title)+'」'+(blocked?'（还没完成）':'（已解锁）')+'</div>':'')
-              + (t.stage||t.soft?'<div class="tk-meta">'+esc(t.stage||'')+(t.soft?' · '+esc(String(t.soft).split(/[,，;；\s]+/)[0]):'')+'</div>':'')
-              + '<div style="display:flex;align-items:center;gap:7px;margin-top:6px">'+this.av(t.owner)
-              +   '<span class="tk-dim" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(this.ownerName(t.owner))+'</span>'
-              +   '<span style="margin-left:auto">'+this.due(t)+'</span></div>'
+            const softs = String(t.soft||'').split(/[,，;；\s]+/).filter(Boolean);
+            const arLab = (TB_AREAS.filter(a=>a[0]===(t.area||'misc'))[0] || ['','🧩 未分区'])[1];
+            const mins = t._ut ? Math.max(1, Math.round((Date.now()-t._ut)/60000)) : null;
+            const fresh = !!(t.updatedBy && t.updatedBy!==CONFIG.me && mins && mins < 180);
+            const lk = t.lockedBy;
+            const locked = !!(lk && lk.by && lk.by!==CONFIG.me && (now()-(lk.at||0)) < 15*60000);
+            const nD = (DISCUSS[t.id]||[]).length;
+            const ms = t.milestoneId ? (D.devAll('devMilestone')||[]).filter(m=>m.id===t.milestoneId)[0] : null;
+            s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+(locked?' locked':'')+'" draggable="true" data-tk-card="'+esc(t.id)+'" data-tk-open="'+esc(t.id)+'">'
+              + '<div class="tk-r1"><span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span>'
+              +   '<span class="tk-ico">'
+              +     '<button type="button" class="tk-ib" data-gd-disc="devTask" data-id="'+esc(t.id)+'" title="团队讨论">💬'+(nD?'<b>'+nD+'</b>':'')+'</button>'
+              +     '<button type="button" class="tk-ib" data-gd-history="'+esc(t.id)+'" title="历史操作记录">🕘</button>'
+              +     '<button type="button" class="tk-ib" data-gd-edit="devTask" data-id="'+esc(t.id)+'" title="编辑任务">✏️</button>'
+              +   '</span></div>'
+              + '<div class="tk-r2"><span>'+esc(arLab)+'</span>'
+              +   (t.stage?'<i>·</i><span>'+esc(t.stage)+'</span>':'')
+              +   (softs.length?softs.map(x=>'<span class="tk-sw">'+esc(x)+'</span>').join(''):'<span class="tk-dim2">未指定软件</span>')
+              +   (t.path?'<span class="tk-sw" title="'+esc(t.path)+'">UE 路径</span>':'')+'</div>'
+              + '<div class="tk-r3"><button type="button" class="tk-own" data-gd-owner="'+esc(t.id)+'" title="点击更换负责人">'+this.av(t.owner)+'<b>'+esc(this.ownerName(t.owner))+'</b></button>'
+              +   '<span class="tk-sp"></span>'
+              +   (t.dueDate ? this.due(t)+'<span class="tk-mut2">'+esc(String(t.dueDate).slice(5))+'</span>' : '<span class="tk-nodue">未排期</span>')
+              + '</div>'
+              + ((locked||dep||ms||fresh) ? '<div class="tk-r4">'
+                    + (locked?'<span class="tk-lk">🔒 '+esc(this.ownerName(lk.by))+' 正在编辑</span>':'')
+                    + (dep?'<span class="tk-wait2'+(blocked?' blocked':'')+'">⛓ '+esc(dep.title)+'</span>':'')
+                    + (ms?'<span class="tk-tag">🚩 '+esc(ms.title)+'</span>':'')
+                    + (fresh?'<span class="tk-tag">'+(mins<=1?'刚刚更新':mins+' 分钟前更新')+'</span>':'')
+                  + '</div>' : '')
               + '</div>';
           });
           if(!sub.length) s += '<div class="tk-dim" style="font-size:11px;padding:3px 2px">—</div>';
@@ -629,7 +653,7 @@ function actions(kind,id,extra) {
         let x = a[k], y = b[k];
         if(k==='owner'){ x = this.ownerName(a.owner); y = this.ownerName(b.owner); }
         if(k==='status'){ x = this.stOrder().indexOf(a.status); y = this.stOrder().indexOf(b.status); }
-        if(k==='priority'){ x = ['high','mid','low'].indexOf(a.priority); y = ['high','mid','low'].indexOf(b.priority); }
+        if(k==='priority'){ x = ['critical','high','mid','low'].indexOf(a.priority); y = ['critical','high','mid','low'].indexOf(b.priority); }
         if(x==null) x=''; if(y==null) y='';
         if(x<y) return -1*dir; if(x>y) return 1*dir; return 0;
       });
@@ -666,7 +690,7 @@ function actions(kind,id,extra) {
             + op('status', this.stOrder().map(x=>[x,this.stName(x)]), t.status)
             + '<td class="num">'+esc(t.stage || '—')+'</td>'
             + op('owner', Object.keys(ROLE).map(x=>[x,ROLE[x].n]), t.owner)
-            + op('priority', [['high','P1'],['mid','P2'],['low','P3']], t.priority)
+            + op('priority', this.PRI4, t.priority)
             + '<td class="tk-ie"><input type="date" data-tk-ief="dueDate" data-tk-id="'+esc(t.id)+'" value="'+esc(t.dueDate||'')+'"></td>'
             + '<td style="white-space:nowrap">'+this.due(t)+'<span class="tk-saved" data-tk-saved="'+esc(t.id)+'">已存 ✓</span></td>'
             + '<td class="num">'+esc(String(t.soft||'').split(/[,，;；\s]+/).filter(Boolean)[0] || '—')+'</td></tr>';
@@ -845,6 +869,8 @@ function actions(kind,id,extra) {
           return;
         }
         if(el.closest('input,select,textarea')) return;
+        /* 卡片上的 💬/🕘/✏️/换负责人 走原有 data-gd-* 处理器，别再顺带选中卡片 */
+        if(el.closest('[data-gd-disc],[data-gd-history],[data-gd-edit],[data-gd-owner]')) return;
         const op = el.closest('[data-tk-open]');
         if(op){ self.rsel = op.dataset.tkOpen; self.rmode = 'task'; g.repaint(); return; }
       }, true);
@@ -1301,7 +1327,7 @@ const GameDev = {
         + '</div>'
         + '<div class="gd-ed-col">'
         + '<div class="gd-ed-pair">'+select('status','状态',schema.choices.status,r.status || 'backlog')+select('owner','负责人',Object.entries(ROLE).map(function(kv){return [kv[0],kv[1].n+'（'+kv[1].r+'）'];}),r.owner||CONFIG.me)+'</div>'
-        + '<div class="gd-ed-pair">'+select('priority','优先级',schema.choices.priority,r.priority || 'mid')+field('dueDate','交付日',r.dueDate,'date')+'</div>'
+        + '<div class="gd-ed-pair">'+select('priority','优先级',[['critical','P0 阻断'],['high','P1 高'],['mid','P2 中'],['low','P3 低']],r.priority || 'mid')+field('dueDate','交付日',r.dueDate,'date')+'</div>'
         + slider('prog','进度',r.prog==null?0:r.prog)
         + chipGroup('area','分区',[['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']],r.area || 'art',false)
         + chipGroup('stage','流程阶段',STAGE_LIST.map(function(s){return [s,s];}),r.stage || '',false)
@@ -2163,9 +2189,35 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tk-card.blocked{border-color:#ef444470;background:color-mix(in srgb,#ef4444 8%,var(--card-bg-2))}
   .tk-card.blocked:before{content:'';position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:2px;background:#ef4444}
   .tk-pri{font-size:9.5px;font-weight:800;padding:1px 5px;border-radius:4px;flex:0 0 auto;background:var(--card-border);color:var(--muted)}
+  /* v2.6.0：P0–P3 四级四色 —— 原来是「P2 灰底 / P3 灰描边」，肉眼几乎分不出（用户实测） */
+  .tk-pri.P0{background:#ef4444;color:#fff;box-shadow:0 0 0 2px color-mix(in srgb,#ef4444 35%,transparent)}
   .tk-pri.P1{background:#f5a524;color:#1b1200}
-  .tk-pri.P2{background:var(--card-border);color:var(--muted)}
+  .tk-pri.P2{background:#3b82f6;color:#fff}
   .tk-pri.P3{background:transparent;color:var(--muted);border:1px solid var(--card-border)}
+  .tk-card .tk-r1{display:flex;gap:5px;align-items:flex-start}
+  .tk-card .tk-r1 .tt{flex:1 1 auto;min-width:0}
+  .tk-card .tk-ico{display:flex;gap:1px;flex:0 0 auto;opacity:0;transition:opacity .15s}
+  .tk-card:hover .tk-ico,.tk-card.sel .tk-ico{opacity:1}
+  .tk-ib{border:none;background:none;color:var(--muted);cursor:pointer;font-size:10.5px;padding:0 3px;border-radius:4px;font-family:inherit;line-height:1.6}
+  .tk-ib:hover{background:var(--card-border);color:var(--text)}
+  .tk-ib b{font-weight:800;font-size:9px}
+  .tk-card .tk-r2{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:10px;color:var(--muted);margin-top:5px}
+  .tk-card .tk-r2 i{font-style:normal;opacity:.45}
+  .tk-card .tk-sw{border:1px solid var(--card-border);border-radius:4px;padding:0 4px}
+  .tk-card .tk-dim2{opacity:.5}
+  .tk-card .tk-r3{display:flex;align-items:center;gap:7px;margin-top:6px}
+  .tk-own{display:inline-flex;align-items:center;gap:5px;border:none;background:none;color:inherit;cursor:pointer;font-family:inherit;font-size:10.5px;padding:0}
+  .tk-own b{color:var(--muted);font-weight:600}
+  .tk-own:hover b{color:var(--accent)}
+  .tk-card .tk-sp{flex:1 1 auto}
+  .tk-mut2{color:var(--muted);opacity:.7;font-size:10px}
+  .tk-nodue{font-size:10px;color:#f5a524;border:1px dashed #f5a52466;border-radius:4px;padding:0 5px;white-space:nowrap}
+  .tk-card .tk-r4{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+  .tk-lk{font-size:9.5px;color:#ef4444;border:1px solid #ef444466;border-radius:4px;padding:0 5px}
+  .tk-wait2{font-size:9.5px;color:#f5a524;border:1px dashed #f5a52455;border-radius:4px;padding:0 5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-wait2.blocked{color:#ef4444;border-color:#ef444455}
+  .tk-tag{font-size:9.5px;color:var(--muted);border:1px solid var(--card-border);border-radius:4px;padding:0 5px}
+  .tk-card.locked{opacity:.65;background-image:repeating-linear-gradient(45deg,transparent 0 6px,color-mix(in srgb,var(--card-border) 45%,transparent) 6px 12px)}
   .tk-av{width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;flex:0 0 auto}
   .tk-st{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);white-space:nowrap}
   .tk-st .d{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
