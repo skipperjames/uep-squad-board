@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.7.0-20261016'; // v3-17 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑
+  const VERSION = 'v2.7.1-20261016'; // v3-17 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -739,7 +739,7 @@ function actions(kind,id,extra) {
       return s + '<div style="font-size:11px;color:var(--muted);margin-top:8px">已完成的不占位置。蓝线 = 今天，条往左溢出成红 = 已经逾期。</div>';
     },
     /* ---- 右栏 ---- */
-    rail(g, list, all){
+    railHtml(g, list, all){
       if(this.rmode === 'task'){
         const t = this.find(all, this.rsel) || list[0];
         if(!t) return '<h3>✎ 任务详情</h3><div class="tk-emptyst">没有任务</div>';
@@ -803,14 +803,14 @@ function actions(kind,id,extra) {
     html(g, tasks, all, p){
       if(this.view === 'table'){
         return this.toolbar(g) + '<div class="tk-wrap'+(this.rail?'':' norail')+'"><div class="tk-main">'+this.table(tasks, all)+'</div>'
-          + (this.rail?'<aside class="tk-rail">'+this.rail(g, tasks, all)+'</aside>':'')+'</div>';
+          + (this.rail?'<aside class="tk-rail">'+this.railHtml(g, tasks, all)+'</aside>':'')+'</div>';
       }
       if(this.view === 'time'){
         return this.toolbar(g) + '<div class="tk-wrap'+(this.rail?'':' norail')+'"><div class="tk-main">'+this.time(tasks)+'</div>'
-          + (this.rail?'<aside class="tk-rail">'+this.rail(g, tasks, all)+'</aside>':'')+'</div>';
+          + (this.rail?'<aside class="tk-rail">'+this.railHtml(g, tasks, all)+'</aside>':'')+'</div>';
       }
       return this.toolbar(g) + '<div class="tk-wrap'+(this.rail?'':' norail')+'"><div class="tk-main">'+this.lane(tasks, all)+'</div>'
-        + (this.rail?'<aside class="tk-rail">'+this.rail(g, tasks, all)+'</aside>':'')+'</div>';
+        + (this.rail?'<aside class="tk-rail">'+this.railHtml(g, tasks, all)+'</aside>':'')+'</div>';
     },
     toolbar(g){
       const V = [['lane','▦','泳道'],['table','☷','总表'],['time','◷','时间']];
