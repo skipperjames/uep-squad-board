@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.6.0-20261015'; // 修复新建任务缺少工作分类：按分区补齐，保留已有分类
+  const VERSION = 'v2.7.0-20261016'; // v3-17 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -95,6 +95,11 @@
   const resFoldMap = () => { try { return JSON.parse(localStorage.getItem('niko_team_resfold') || '{}'); } catch (e) { return {}; } };
   const resFolded = pid => resFoldMap()[pid] !== 0; // 没动过 = 默认收起
   const toggleResFold = pid => { const m = resFoldMap(); m[pid] = (m[pid] === 0 ? 1 : 0); try { localStorage.setItem('niko_team_resfold', JSON.stringify(m)); } catch (e) {} };
+  // v2.7.0（v3-17）：公告从资源区抽出，独立成底部渐变大字条 —— 单独位置、显眼、不随资源折叠
+  const noticeBar = p => {
+    if (!p || !p.notice) return '';
+    return '<div class="tk-ann"><div class="tk-ann-t">📢 公告</div><div class="tk-ann-c">' + linkify(esc(p.notice)) + '</div></div>';
+  };
   // v2.3.2：复制到剪贴板（Shadow DOM / 非 https 环境兜底走 execCommand）
   const copyText = (txt, ok) => {
     const done = () => { if (ok) ok(); };
@@ -547,10 +552,7 @@ function actions(kind,id,extra) {
       const pct = tasks.length ? Math.round(done/tasks.length*100) : 0;
       const live = tasks.filter(t=>t.status!=='done');
       let sum = esc(p.name) + ' · ' + esc(p.engine || '未设置工具')
-        + ' · 负责人 ' + esc(this.ownerName(CONFIG.me))
-        + ' · 成员 ' + Object.keys(ROLE).length + ' 人'
         + ' · 任务 ' + done + '/' + tasks.length;
-      if(p.targetDate) sum += ' · 目标 ' + esc(p.targetDate);
       if(ms.length) sum += ' · 里程碑 ' + ms.length + ' 个';
       let s = '<div class="tk-proj"><div class="tk-proj-hd" data-tk-proj>'
         + '<b>📁 项目详情</b><span class="sum">'+sum+'</span>'
@@ -560,9 +562,13 @@ function actions(kind,id,extra) {
           + '<div class="tk-pf"><i>项目</i><b>'+esc(p.name)+'</b></div>'
           + '<div class="tk-pf"><i>状态</i><b>'+esc(LABELS[p.status] || p.status || '—')+'</b></div>'
           + '<div class="tk-pf"><i>工具</i><b>'+esc(p.engine || '—')+'</b></div>'
-          + '<div class="tk-pf"><i>目标日期</i><b>'+esc(p.targetDate || '—')+'</b></div>'
-          + '<div class="tk-pf"><i>负责人</i><b>'+this.av(CONFIG.me)+esc(this.ownerName(CONFIG.me))+'</b></div>'
-          + '<div class="tk-pf"><i>成员</i><b>'+Object.keys(ROLE).map(id=>'<span style="display:inline-flex;align-items:center;gap:4px">'+this.av(id)+esc(ROLE[id].n)+'</span>').join('')+'</b></div>'
+          + '<div class="tk-pf"><i>里程碑</i><b>'+(function(){
+            const mCur = ms.filter(m=>m.status!=='done')[0] || ms[ms.length-1];
+            if(!mCur) return '—';
+            const dd = mCur.dueDate ? ' · ' + esc(String(mCur.dueDate).slice(5)) : '';
+            const tail = ms.length > 1 ? '<span style="color:var(--muted);font-weight:500">（共 ' + ms.length + ' 个）</span>' : '';
+            return '🚩 ' + esc(mCur.title || '未命名') + dd + tail;
+          })()+'</b></div>'
           + '<div class="tk-pf" style="grid-column:1/-1"><i>任务分布</i><b>'
             + this.stOrder().map(s2=>this.stName(s2)+' '+tasks.filter(t=>t.status===s2).length).join(' · ')
             + ' · 逾期 '+live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length
@@ -573,7 +579,8 @@ function actions(kind,id,extra) {
         if(res) s += '<div style="grid-column:1/-1">'+res+'</div>';
         s += '</div>';
       }
-      return s + '</div>';
+      /* v3-17：公告沉底但做成大字渐变 footer，收尾即高光（详情收起也照常显示） */
+      return s + noticeBar(p) + '</div>';
     },
     /* ---- 视图 1 · 泳道 ---- */
     lane(tasks, all){
@@ -1007,7 +1014,7 @@ const GameDev = {
     const kpiItems=[['任务总数',tasks.length],['进行中',tasks.filter(r=>r.status==='doing').length],['待验收',tasks.filter(r=>r.status==='review').length],['待开发',tasks.filter(r=>r.status==='backlog').length],['未关闭 BUG',bugs.filter(r=>r.status!=='closed').length],['近 7 天工时',hours(summary.minutes)],['资产就绪',assets.filter(r=>assetProgress(r).percent===100).length+' / '+assets.length]];
     const kpibar='<div class="tk-kpibar">'+TBoard.kpi(tasks,bugs)+'</div>';
     const tkProj=TBoard.proj(this,p,tasks);
-    const info=p?'<section class="gd-project-card">'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+this.resourcePanel(p)+'</section>':'';
+    const info=p?'<section class="gd-project-card">'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+this.resourcePanel(p)+noticeBar(p)+'</section>':'';
     const tabs='<div class="gd-tabs" role="tablist" aria-label="开发功能">'+TABS.map(function(t){return '<button role="tab" tabindex="'+(tab===t[0]?'0':'-1')+'" aria-selected="'+(tab===t[0])+'" class="gd-tab'+(tab===t[0]?' on':'')+'" data-gd-tab="'+t[0]+'">'+I.get(t[2])+'<span>'+t[1]+'</span><small>'+all(t[0]).length+'</small></button>';}).join('')+'</div>';
     if(!p)return title+picker+tabs+'<div class="gd-empty gd-welcome"><span class="gd-empty-icon">'+I.get('gamepad')+'</span><h3>先给你的作品建一个项目</h3><p>填写名称和目标，就能开始拆分里程碑、安排任务和记录开发。</p><button class="btn btn-primary" data-gd-new-project>创建第一个项目</button></div>';
     const toolbar='<div class="gd-toolbar"><div class="gd-search"><span>'+I.get('search')+'</span><input id="gd-search" class="input" aria-label="搜索当前功能" placeholder="搜索'+TABS.find(t=>t[0]===tab)[1]+'…" value="'+esc(this._query)+'"></div>'+this.filterSelect()+'<select id="gd-member" class="input" aria-label="筛选成员">'+optionList(Object.entries(ROLE).map(([id,r])=>[id,r.n]),this._member,'全部成员')+'</select><button class="btn btn-primary" data-gd-new="'+tab+'">'+I.get('plus')+NEW_LABELS[tab]+'</button></div>';
@@ -1083,11 +1090,11 @@ const GameDev = {
       const lb=head.join(' ') || '链接';
       items.push({ic:ic,lb:lb,vl:seg[1] || '',sub:seg[2] || ''});
     });
-    if(!items.length && !notes.length && !p.notice)return '<div class="gd-res gd-res-empty"><span class="gd-res-h">📌 项目资源</span><span class="gd-res-hint">工程总路径 / 素材网盘 / 排期表 / 策划文档 / ⚠️注意事项 / 📢公告 —— 点右上「编辑」填一次，全组都能用</span></div>';
+    if(!items.length && !notes.length && !p.notice)return '<div class="gd-res gd-res-empty"><span class="gd-res-h">📌 项目资源</span><span class="gd-res-hint">工程总路径 / 素材网盘 / 排期表 / 策划文档 / ⚠️注意事项 —— 点右上「编辑」填一次，全组都能用</span></div>';
     // v2.3.3：区头 = 标题+摘要 左，编辑/折叠 右（对齐目标设计）；默认收起，状态记本机
     const folded=resFolded(p.id);
-    const nRes=items.length,nNote=notes.length,nB=(p.notice?1:0);
-    const summary=(nRes?nRes+' 项资源':'')+(nNote?(nRes?' · ':'')+nNote+' 条注意事项':'')+(nB?((nRes||nNote)?' · ':'')+'有公告':'')||'空';
+    const nRes=items.length,nNote=notes.length;
+    const summary=(nRes?nRes+' 项资源':'')+(nNote?(nRes?' · ':'')+nNote+' 条注意事项':'')||'空';
     const body='<div class="gd-res-body'+(folded?' folded':'')+'">'
       + (items.length ? '<div class="gd-res-grid">' + items.map(function(it){
             const isUrl=/^https?:\/\//i.test(it.vl);
@@ -1100,7 +1107,6 @@ const GameDev = {
             return '<div class="gd-res-i"><span class="gd-res-ic">' + esc(it.ic) + '</span><span class="gd-res-tx"><b>' + esc(it.lb) + (it.sub ? '　·　' + esc(it.sub) : '') + '</b>' + val + '</span>' + act + '</div>';
           }).join('') + '</div>' : '')
       + (notes.length ? '<div class="gd-res-notes"><b>⚠️ 注意事项</b><ul>' + notes.map(function(n){return '<li>' + linkify(esc(n)) + '</li>';}).join('') + '</ul></div>' : '')
-      + (p.notice ? '<div class="gd-res-notice"><b>📢 公告</b><span>' + linkify(esc(p.notice)) + '</span></div>' : '')
       + '</div>';
     return '<div class="gd-res">'
       + '<div class="gd-res-head"><span class="gd-res-t">📌 项目资源</span><small>'+esc(summary)+'</small>'
@@ -2182,6 +2188,12 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tk-pf b{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .tk-plink{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;border:1px solid var(--card-border);border-radius:7px;padding:2px 8px;cursor:pointer;background:var(--card-bg);color:var(--text);font-family:inherit}
   .tk-plink:hover{border-color:var(--accent);color:var(--accent)}
+  /* v2.7.0（v3-17）：公告独立条 —— 底部渐变大字 footer，走主题令牌 6 套主题自动跟随 */
+  .tk-ann{margin:2px 13px 12px;background:linear-gradient(90deg,color-mix(in srgb,var(--accent2,#8b5cf6) 20%,transparent),color-mix(in srgb,var(--accent2,#8b5cf6) 4%,transparent));border-left:3px solid var(--accent2,#8b5cf6);border-radius:0 9px 9px 0;padding:9px 13px}
+  .tk-ann-t{font-size:10.5px;font-weight:800;letter-spacing:3px;color:var(--accent2,#8b5cf6);display:flex;align-items:center;gap:6px;margin-bottom:2px}
+  .tk-ann-c{font-size:13px;font-weight:600;color:var(--text);line-height:1.6;word-break:break-all}
+  .tk-ann-c a{color:var(--accent)}
+  .gd-project-card .tk-ann{margin:10px 0 0}
   /* 卡片/零件 */
   .tk-card{background:var(--card-bg-2);border:1px solid var(--card-border);border-radius:10px;padding:8px 10px;transition:.14s;cursor:pointer;position:relative}
   .tk-card:hover{border-color:var(--accent)}
