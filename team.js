@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.9.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.10.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -42,6 +42,7 @@
       token: null                          // 共用写入 token（空=公开只读）
     },
     theme: 'auto',                         // auto | light | dark
+    tone: 'soft',                          // v3-20 语气档：soft 陈述事实 | standard 报进度 | strict 催办（设备本地偏好，不同步）
     showMyView: true,
     defaultView: 'all',                    // all | mine
     lockedPollMs: 5000                     // 「正在编辑」锁轮询（预留）
@@ -67,6 +68,13 @@
      这样老数据（单值）不用迁移、新数据天然兼容。 */
   function ownerIds(v) { return String(v == null ? '' : v).split(/[,，;；\s]+/).filter(Boolean); }
   function ownerFirst(v) { return ownerIds(v)[0] || ''; }
+  /* v3-20 · 排期语气档（设备本地偏好，不进团队数据）
+     soft     = 只陈述事实：「1 天前 / 今天 / 3 天后」，逾期不上红
+     standard = 报进度：「逾期 1 天 / 今天到期 / 剩 3 天」（旧行为）
+     strict   = 催办：逾期标红加粗 */
+  function toneMode() { return (CONFIG.tone === 'strict' || CONFIG.tone === 'standard') ? CONFIG.tone : 'soft'; }
+  function overWord() { return toneMode() === 'soft' ? '待跟进' : '逾期'; }
+  function overColor() { return toneMode() === 'soft' ? '#f5a524' : '#ef4444'; }
   /* 讨论 / 提醒里的人：色点 + 人色名字 */
   function whoName(id) {
     const r = roleOf(id);
@@ -647,11 +655,7 @@ function actions(kind,id,extra) {
     /* 剩余天数 —— 与任务卡同一套说法（逾期 N 天 / 今天到期 / 剩 N 天 / 未排期） */
     left: function (date, done) {
       if (!date) return '<span class="tk-nodue">未排期</span>';
-      if (done) return '<span class="tk-due done">已完成</span>';
-      const dd = TBoard.daysTo(date);
-      if (dd < 0) return '<span class="tk-due over">逾期 ' + (-dd) + ' 天</span>';
-      if (dd === 0) return '<span class="tk-due over">今天到期</span>';
-      return '<span class="tk-due' + (dd <= 2 ? ' soon' : ' ok') + '">剩 ' + dd + ' 天</span>';
+      return TBoard.due({ dueDate: date, status: done ? 'done' : '' });
     },
     /* 泳道外壳：cols=[[key,label]...]；cell(key) 出该列卡片；count(key) 出数量 */
     lane: function (opt) {
@@ -706,8 +710,18 @@ function actions(kind,id,extra) {
     daysTo(d){ return Math.round((new Date(d+'T00:00:00') - new Date(D.today()+'T00:00:00')) / 86400000); },
     due(t){
       if(!t.dueDate) return '';
-      const dd = this.daysTo(t.dueDate);
+      const dd = this.daysTo(t.dueDate), tone = toneMode();
       if(t.status === 'done') return '<span class="tk-due done">已完成</span>';
+      if(tone === 'soft'){
+        if(dd < 0)   return '<span class="tk-due calm-over">'+(-dd)+' 天前</span>';
+        if(dd === 0) return '<span class="tk-due calm-today">今天</span>';
+        return '<span class="tk-due calm">'+dd+' 天后</span>';
+      }
+      if(tone === 'strict'){
+        if(dd < 0)   return '<span class="tk-due over is-loud">⚠️ 逾期 '+(-dd)+' 天</span>';
+        if(dd === 0) return '<span class="tk-due over is-loud">今天到期</span>';
+        return '<span class="tk-due'+(dd <= 2 ? ' soon' : ' ok')+'">剩 '+dd+' 天</span>';
+      }
       if(dd < 0) return '<span class="tk-due over">逾期 '+(-dd)+' 天</span>';
       if(dd === 0) return '<span class="tk-due over">今天到期</span>';
       if(dd <= 2) return '<span class="tk-due soon">'+dd+' 天后</span>';
@@ -743,7 +757,7 @@ function actions(kind,id,extra) {
         + it(tasks.filter(t=>t.status==='doing').length,'在做')
         + it(tasks.filter(t=>t.status==='review').length,'待验收')
         + it(today,'今天到期','warn')
-        + it(over,'逾期','hot')
+        + it(over, overWord(), toneMode()==='soft' ? '' : 'hot')
         + '<i class="sep"></i><span class="pw">'+this.bar(pct)+'<span class="pct">'+pct+'% 完成（'+done+'/'+tasks.length+'）</span></span>'
         + '<i class="sep"></i><span class="lds">';
       Object.keys(ROLE).forEach(id=>{
@@ -767,7 +781,7 @@ function actions(kind,id,extra) {
         return UB.kpi([
           [list.length, '里程碑'],
           [live.filter(r => r.status === 'active').length, '进行中'],
-          [over, '逾期', over ? 'hot' : ''],
+          [over, overWord(), (over && toneMode()!=='soft') ? 'hot' : ''],
           [linkedDone + ' / ' + linked.length, '关联任务']
         ], { pct: list.length ? Math.round(done / list.length * 100) : 0, pctLabel: '完成（' + done + '/' + list.length + '）' });
       }
@@ -846,7 +860,7 @@ function actions(kind,id,extra) {
           })()+'</b></div>'
           + '<div class="tk-pf" style="grid-column:1/-1"><i>任务分布</i><b>'
             + this.stOrder().map(s2=>this.stName(s2)+' '+tasks.filter(t=>t.status===s2).length).join(' · ')
-            + ' · 逾期 '+live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length
+            + ' · '+overWord()+' '+live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length
             + ' · 完成率 '+pct+'%</b></div>';
         if(p.description) s += '<div class="tk-pf" style="grid-column:1/-1"><i>项目说明</i><b style="font-weight:500">'+esc(p.description)+'</b></div>';
         /* 原「项目资源区」整块搬进来（保持同一份数据与复制行为） */
@@ -875,9 +889,9 @@ function actions(kind,id,extra) {
         s += '<div class="tk-lane'+(min?' min':'')+'">'
           + '<div class="tk-lane-hd" data-tk-lane="'+A[0]+'" style="border-left-color:'+A[2]+'">'
           +   '<span>'+A[1]+'</span>'
-          +   '<span class="cnt">'+list.length+' 条 · 在做 '+doing+(over?' · <span style="color:#ef4444">'+over+' 逾期</span>':'')+'</span>'
+          +   '<span class="cnt">'+list.length+' 条 · 在做 '+doing+(over?' · <span style="color:'+overColor()+'">'+over+' '+overWord()+'</span>':'')+'</span>'
           +   '<span class="tk-minichips">'+this.stOrder().map(k=>{const n=list.filter(t=>t.status===k).length;return n?'<span>'+this.stName(k)+' '+n+'</span>':'';}).join('')+'</span>'
-          +   (worst?'<span class="hint">⚠️ 「'+this.stName(worst.k)+'」堆积最多 —— 卡点在这</span>':'')
+          +   ((worst && toneMode()!=='soft')?'<span class="hint">⚠️ 「'+this.stName(worst.k)+'」堆积最多 —— 卡点在这</span>':'')
           +   '<span class="tri" style="margin-left:'+(worst?'8px':'auto')+'">'+(min?'展开 ▾':'收起 ▴')+'</span>'
           + '</div><div class="tk-lane-bd">';
         this.stOrder().forEach(k=>{
@@ -958,7 +972,7 @@ function actions(kind,id,extra) {
         s += '<tr class="grp" data-tk-grp="s_'+k+'"><td class="frz"></td><td colspan="8">'
           + '<span class="tri">'+(open?'▾':'▸')+'</span> '
           + '<span class="tk-st"><i class="d" style="background:'+TB_ST[k]+'"></i>'+this.stName(k)+'</span> '
-          + '<span class="gc">'+list2.length+' 条'+(over?' · <span style="color:#ef4444">'+over+' 逾期</span>':'')+'</span></td></tr>';
+          + '<span class="gc">'+list2.length+' 条'+(over?' · <span style="color:'+overColor()+'">'+over+' '+overWord()+'</span>':'')+'</span></td></tr>';
         if(!list2.length) s += '<tr class="'+(open?'':'hide')+'"><td class="frz"></td><td colspan="8" class="tk-dim" style="font-size:11px;padding:9px">— 这一组是空的</td></tr>';
         list2.forEach(t=>{
           const dd = t.dueDate ? this.daysTo(t.dueDate) : null;
@@ -1068,8 +1082,8 @@ function actions(kind,id,extra) {
       const sec = (title, arr, cls) => !arr.length ? '' : '<div class="tk-rsec">'+title+' · '+arr.length+'</div>'
         + arr.map(t=>'<div class="tk-rrow '+(cls||'')+'" data-tk-open="'+esc(t.id)+'">'+this.av(t.owner)+'<span class="t">'+esc(t.title)+'</span>'+this.due(t)+'</div>').join('');
       let s = '<h3>📌 今天</h3>';
-      s += sec('逾期', over, 'over') + sec('今天到期', td, 'today') + sec('2 天内', soon, '');
-      if(!over.length && !td.length && !soon.length) s += '<div class="tk-emptyst">今天没有到期，也没有逾期 🎉</div>';
+      s += sec(overWord(), over, toneMode()==='soft' ? '' : 'over') + sec('今天到期', td, toneMode()==='soft' ? '' : 'today') + sec('2 天内', soon, '');
+      if(!over.length && !td.length && !soon.length) s += '<div class="tk-emptyst">今天没有到期，也没有'+overWord()+' 🎉</div>';
       if(blocked.length) s += '<div class="tk-rsec">被前置挡住 · '+blocked.length+'</div>'
         + blocked.map(t=>'<div class="tk-rrow" data-tk-open="'+esc(t.id)+'"><span style="color:#f5a524;font-size:10px">⛓</span><span class="t">'+esc(t.title)+'</span>'+this.av(t.owner)+'</div>').join('');
       s += '<div class="tk-rsec">怎么用</div><div style="font-size:11px;color:var(--muted);line-height:1.75">'
@@ -1369,7 +1383,7 @@ const GameDev = {
     };
     const over=list.filter(r=>r.status!=='done'&&r.dueDate&&TBoard.daysTo(r.dueDate)<0).length;
     return UB.lane({icon:'🚩',title:'项目里程碑',color:'#8b5cf6',cls:'tb-c3',
-        sub:list.length+' 个 · 完成 '+list.filter(r=>r.status==='done').length+(over?' · '+over+' 逾期':''),
+        sub:list.length+' 个 · 完成 '+list.filter(r=>r.status==='done').length+(over?' · '+over+' '+overWord():''),
         hint:over?'⚠️ 有 '+over+' 个已过截止日':'',
         tail:'按截止日期排',
         cols:COLS,
@@ -1855,12 +1869,13 @@ const GameDev = {
     if(MODE==='legacy'){if(GameDev._clock)clearInterval(GameDev._clock);renderLegacy();return;}
     root.querySelector('.t-root').dataset.th=curTheme();
     const surf=root.querySelector('.surface'),active=root.activeElement,search=active?.id==='gd-search',pos=active?.selectionStart;
-    surf.innerHTML='<div class="top"><div class="brand">🎮 UE 团队开发 <small>'+VERSION+'</small></div><div class="spacer"></div><div class="topset" id="devTopSet"><button class="gb gb-set" id="devSetToggle" aria-expanded="false">⚙️ 设置 <span class="cs">▾</span></button><div class="topset-panel"><label>我是谁 <select id="devMe">'+Object.entries(ROLE).map(([k,r])=>'<option value="'+esc(k)+'" '+(k===CONFIG.me?'selected':'')+'>'+esc(r.n)+'</option>').join('')+'</select></label><button class="gb" id="legacyMode">旧看板 · '+DATA.length+'</button><button class="gb" id="devTrash">回收站</button><button class="gb" id="devLogHistory">团队历史</button><button class="gb" id="devSync">同步设置</button><p class="topset-note">只设一次，之后本机记住 —— 所以默认收起。</p></div></div><button class="syncdot" id="devMentions" title="@我的提醒">🔔<span class="stxt"></span></button><button class="syncdot" id="devPull"><i></i><span class="stxt"></span></button></div>'+conflictBanner()+'<div class="gd-root">'+GameDev.body()+'</div>';
+    surf.innerHTML='<div class="top"><div class="brand">🎮 UE 团队开发 <small>'+VERSION+'</small></div><div class="spacer"></div><div class="topset" id="devTopSet"><button class="gb gb-set" id="devSetToggle" aria-expanded="false">⚙️ 设置 <span class="cs">▾</span></button><div class="topset-panel"><label>提醒语气 <select id="devTone"><option value="soft" '+(CONFIG.tone==='soft'?'selected':'')+'>柔和 · 只陈述事实</option><option value="standard" '+(CONFIG.tone==='standard'?'selected':'')+'>标准 · 报剩几天</option><option value="strict" '+(CONFIG.tone==='strict'?'selected':'')+'>严格 · 逾期标红</option></select></label><label>我是谁 <select id="devMe">'+Object.entries(ROLE).map(([k,r])=>'<option value="'+esc(k)+'" '+(k===CONFIG.me?'selected':'')+'>'+esc(r.n)+'</option>').join('')+'</select></label><button class="gb" id="legacyMode">旧看板 · '+DATA.length+'</button><button class="gb" id="devTrash">回收站</button><button class="gb" id="devLogHistory">团队历史</button><button class="gb" id="devSync">同步设置</button><p class="topset-note">只设一次，之后本机记住 —— 所以默认收起。</p></div></div><button class="syncdot" id="devMentions" title="@我的提醒">🔔<span class="stxt"></span></button><button class="syncdot" id="devPull"><i></i><span class="stxt"></span></button></div>'+conflictBanner()+'<div class="gd-root">'+GameDev.body()+'</div>';
     GameDev._box=surf.querySelector('.gd-root');GameDev.bind(GameDev._box);hydrateImages();
     root.querySelector('#legacyMode').onclick=()=>{MODE='legacy';render();};root.querySelector('#devTrash').onclick=showDevTrash;root.querySelector('#devLogHistory').onclick=showReplay;root.querySelector('#devSync').onclick=showSyncPanel;root.querySelector('#devPull').onclick=()=>pull();root.querySelector('#devMentions').onclick=showMentions;updateBell();
     const setBox=root.querySelector('#devTopSet'),setBtn=root.querySelector('#devSetToggle');
     if(setBtn)setBtn.onclick=e=>{e.stopPropagation();const on=setBox.classList.toggle('open');setBtn.setAttribute('aria-expanded',on?'true':'false');};
     if(setBox)surf.querySelector('.top').addEventListener('click',e=>{if(!e.target.closest('#devTopSet')){setBox.classList.remove('open');setBtn&&setBtn.setAttribute('aria-expanded','false');}});
+    root.querySelector('#devTone').onchange=e=>{CONFIG.tone=e.target.value;try{localStorage.setItem(SYNC_PREFIX+'tone',CONFIG.tone);}catch(err){}render();};
     root.querySelector('#devMe').onchange=e=>{CONFIG.me=e.target.value;try{localStorage.setItem(SYNC_PREFIX+'me',CONFIG.me);}catch(e){}render();};root.querySelector('#resolveDev')?.addEventListener('click',resolveConflict);
     setDot(...syncStatus);if(search){const el=root.querySelector('#gd-search');el.focus();el.setSelectionRange(pos,pos);}
     try{localStorage.setItem(SYNC_PREFIX+'prefs',JSON.stringify({project:GameDev._project,tab:GameDev._tab,member:GameDev._member}));}catch(e){}
@@ -2644,6 +2659,11 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tk-st .d{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
   .tk-due{font-size:10.5px;font-weight:700;white-space:nowrap}
   .tk-due.over{color:#ef4444}.tk-due.soon{color:#f5a524}.tk-due.ok{color:var(--muted)}.tk-due.done{color:#10b981}
+  /* v3-20 柔和档：不评判、不催，只报事实 */
+  .tk-due.calm{color:var(--muted);font-weight:500}
+  .tk-due.calm-today{color:var(--accent);font-weight:600}
+  .tk-due.calm-over{color:#f5a524;font-weight:600}
+  .tk-due.is-loud{background:color-mix(in srgb,#ef4444 14%,transparent);border-radius:4px;padding:0 4px}
   .tk-mut{color:var(--muted)}.tk-dim{color:var(--muted);opacity:.75}
   .tk-emptyst{color:var(--muted);font-size:12px;padding:12px;text-align:center;border:1px dashed var(--card-border);border-radius:9px}
   /* 视图 1 · 泳道 */
@@ -3712,6 +3732,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     const opt = {};
     if(ds.me)opt.me=ds.me;else try{const me=localStorage.getItem(SYNC_PREFIX+'me');if(ROLE[me])opt.me=me;}catch(e){}
     if (ds.theme) opt.theme = ds.theme;
+    try { const tn = localStorage.getItem(SYNC_PREFIX + 'tone'); if (tn) opt.tone = tn; } catch (e) {}
     if (ds.view) opt.defaultView = ds.view;
     const chOpt = {};
     if (ds.repo) chOpt.repo = ds.repo;
