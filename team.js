@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.10.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.11.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -343,6 +343,51 @@
     hit.forEach(function(k){M[k]=M[k]||[];M[k].push({t:now(),by:CONFIG.me,cid:cardId||'',x:String(text).slice(0,140)});if(M[k].length>30)M[k].shift();added.push(ROLE[k].n);});
     return added;
   }
+  /* ---------- v3-21 · 通用小菜单（状态点 / 右键共用） ----------
+     挂进 .t-root 才拿得到主题变量（挂 shadowRoot 会透明，v3-19 踩过）。
+     定位：默认贴 anchor 下方，出界就翻到上方 / 左移。 */
+  let MM = null;
+  function closeMenu() { if (MM) { try { MM.remove(); } catch (e) {} MM = null; } }
+  function openMenu(anchor, items, opt) {
+    closeMenu();
+    opt = opt || {};
+    const host = root.querySelector('.t-root') || root;
+    const m = document.createElement('div');
+    m.className = 'tb-menu';
+    m.innerHTML = (opt.title ? '<div class="tb-menu-hd">' + esc(opt.title) + '</div>' : '')
+      + items.map(function (it, i) {
+        if (it.sep) return '<div class="sp"></div>';
+        return '<button type="button" class="tb-menu-i' + (it.tone ? ' ' + it.tone : '') + '" data-mi="' + i + '">'
+          + '<span class="ic">' + (it.icon || '') + '</span><span>' + esc(it.label) + '</span>'
+          + (it.on ? '<span class="ck">✓</span>' : '') + '</button>';
+      }).join('');
+    host.appendChild(m);
+    const rc = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 0, bottom: 0, height: 0 };
+    const mw = m.offsetWidth || 170, mh = m.offsetHeight || 190;
+    let x = (opt.x != null ? opt.x : rc.left);
+    let y = (opt.y != null ? opt.y : rc.bottom + 4);
+    if (x + mw > window.innerWidth - 8) x = Math.max(8, window.innerWidth - mw - 8);
+    if (y + mh > window.innerHeight - 8) y = Math.max(8, (opt.y != null ? y - mh : rc.top - mh - 6));
+    m.style.left = Math.round(x) + 'px';
+    m.style.top = Math.round(y) + 'px';
+    m.addEventListener('mousedown', function (e) {
+      const b = e.target.closest('[data-mi]');
+      if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      const it = items[+b.dataset.mi];
+      closeMenu();
+      try { it.fn && it.fn(); } catch (err) { try { App.toast(err.message, 7000); } catch (x) {} }
+    });
+    MM = m;
+  }
+  /* 点别处 / Esc 收起（shadow DOM 里 e.target 会被 retarget，必须用 composedPath 判断） */
+  document.addEventListener('mousedown', function (e) {
+    if (!MM) return;
+    const path = e.composedPath ? e.composedPath() : [];
+    if (path.some(function (n) { return n === MM; })) return;
+    closeMenu();
+  }, true);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && MM) closeMenu(); }, true);
   /* ---------- v3-19 · @ 成员选择器 ----------
      原来只能在框里手打「@邢锦」，错一个字就提醒不到（notifyMentions 按名字精确匹配）。
      现在输入 @ 直接弹全组成员：↑↓ 选、Enter 或点击确认，插进去的是「当前的显示名」。 */
@@ -745,6 +790,66 @@ function actions(kind,id,extra) {
     },
     bar(v,c){ return '<div style="flex:1 1 auto;height:5px;border-radius:3px;background:var(--card-border);overflow:hidden"><i style="display:block;height:100%;border-radius:3px;width:'+Math.max(0,Math.min(100,v||0))+'%;background:'+(c||'var(--accent)')+'"></i></div>'; },
     find(tasks,id){ return tasks.filter(t=>t.id===id)[0]; },
+    /* ---- v3-21 · 三个一步到位的卡片操作（不用拖、也不用进弹窗） ---- */
+    statusMenu(anchor, id, g) {
+      const self = this;
+      const t = D.devAll('devTask').filter(function (x) { return x.id === id; })[0];
+      if (!t) return;
+      openMenu(anchor, this.stOrder().map(function (k) {
+        return {
+          icon: '<i class="d" style="background:' + (TB_ST[k] || '#888') + '"></i>',
+          label: self.stName(k), on: t.status === k,
+          fn: function () {
+            if (t.status === k) return;
+            D.devSave('devTask', { status: k }, id);
+            g.repaint(); App.toast('已移到「' + self.stName(k) + '」');
+          }
+        };
+      }), { title: '移到哪一列？' });
+    },
+    claimTask(id, g) {
+      const t = D.devAll('devTask').filter(function (x) { return x.id === id; })[0];
+      if (!t) return;
+      const ids = ownerIds(t.owner);
+      if (ids.indexOf(CONFIG.me) >= 0) { App.toast('你已经是这张卡的负责人了'); return; }
+      ids.push(CONFIG.me);
+      D.devSave('devTask', { owner: ids.join(',') }, id);
+      g.repaint();
+      App.toast(ids.length > 1 ? '已加入 · 现在 ' + ids.length + ' 个负责人' : '已认领 · 这张卡归你了');
+    },
+    dupTask(id, g) {
+      const t = D.devAll('devTask').filter(function (x) { return x.id === id; })[0];
+      if (!t) return;
+      const KEEP = ['projectId', 'title', 'description', 'acceptance', 'note', 'status', 'priority', 'area', 'stage', 'soft', 'owner', 'dueDate', 'path', 'milestoneId', 'dependsOn'];
+      const p = {};
+      KEEP.forEach(function (k) { if (t[k] !== undefined && t[k] !== null && t[k] !== '') p[k] = t[k]; });
+      p.title = String(t.title || '').slice(0, 190) + '（副本）';
+      p.prog = 0;
+      D.devSave('devTask', p);
+      g.repaint();
+      App.toast('已复制一张');
+    },
+    cardMenu(anchor, id, x, y, g) {
+      const self = this;
+      const t = D.devAll('devTask').filter(function (r) { return r.id === id; })[0];
+      if (!t) return;
+      const st = this.stOrder();
+      const next = st[Math.min(st.length - 1, st.indexOf(t.status) + 1)];
+      openMenu(anchor, [
+        { icon: '✏️', label: '编辑这张卡', fn: function () { g.openEditor('devTask', id); } },
+        { icon: '💬', label: '团队讨论', fn: function () { openDevDiscussion('devTask', id); } },
+        { icon: '🕘', label: '历史记录', fn: function () { showHistory(id); } },
+        { sep: true },
+        { icon: '🔀', label: '移到「' + self.stName(next) + '」', fn: function () {
+            if (next === t.status) return;
+            D.devSave('devTask', { status: next }, id); g.repaint(); App.toast('已移到「' + self.stName(next) + '」');
+          } },
+        { icon: '⧉', label: '复制一张', fn: function () { self.dupTask(id, g); } },
+        { icon: '＋', label: '我来做 / 加入', fn: function () { self.claimTask(id, g); } },
+        { sep: true },
+        { icon: '🗑', label: '删除', tone: 'danger', fn: function () { g.remove('devTask', id); } }
+      ], { x: x, y: y });
+    },
     /* ---- KPI（5 个数 + 总进度 + 成员负载） ---- */
     kpi(tasks, bugs){
       const live = tasks.filter(t=>t.status!=='done');
@@ -909,7 +1014,8 @@ function actions(kind,id,extra) {
             const nD = (DISCUSS[t.id]||[]).length;
             const ms = t.milestoneId ? (D.devAll('devMilestone')||[]).filter(m=>m.id===t.milestoneId)[0] : null;
             s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+(locked?' locked':'')+'" draggable="true" data-tk-card="'+esc(t.id)+'" data-tk-open="'+esc(t.id)+'">'
-              + '<div class="tk-r1"><span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span>'
+              + '<div class="tk-r1"><button type="button" class="tk-stbtn" data-tk-st="'+esc(t.id)+'" title="点一下换列（现在：'+esc(this.stName(t.status))+'）" style="background:'+(TB_ST[t.status]||'#888')+'"></button>'
+              +   '<span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span>'
               +   '<span class="tk-ico">'
               +     '<button type="button" class="tk-ib" data-gd-disc="devTask" data-id="'+esc(t.id)+'" title="团队讨论">💬'+(nD?'<b>'+nD+'</b>':'')+'</button>'
               +     '<button type="button" class="tk-ib" data-gd-history="'+esc(t.id)+'" title="历史操作记录">🕘</button>'
@@ -920,6 +1026,7 @@ function actions(kind,id,extra) {
               +   (softs.length?softs.map(x=>'<span class="tk-sw">'+esc(x)+'</span>').join(''):'<span class="tk-dim2">未指定软件</span>')
               +   (t.path?'<span class="tk-sw" title="'+esc(t.path)+'">UE 路径</span>':'')+'</div>'
               + '<div class="tk-r3"><button type="button" class="tk-own" data-gd-owner="'+esc(t.id)+'" title="点击更换负责人">'+this.av(t.owner)+'<b>'+esc(this.ownerName(t.owner))+'</b></button>'
+              +   (ownerIds(t.owner).indexOf(CONFIG.me)<0 ? '<button type="button" class="tb-claim" data-tk-claim="'+esc(t.id)+'" title="认领这张卡（也可以多人一起做）">＋ 我来做</button>' : '')
               +   '<span class="tk-sp"></span>'
               +   (t.dueDate ? this.due(t)+'<span class="tk-mut2">'+esc(String(t.dueDate).slice(5))+'</span>' : '<span class="tk-nodue">未排期</span>')
               + '</div>'
@@ -1167,6 +1274,11 @@ function actions(kind,id,extra) {
           return;
         }
         if(el.closest('input,select,textarea')) return;
+        /* v3-21：卡片里的快捷按钮，必须抢在「打开详情」之前拦掉 */
+        const stb = el.closest('[data-tk-st]');
+        if(stb){ e.stopPropagation(); self.statusMenu(stb, stb.dataset.tkSt, g); return; }
+        const clm = el.closest('[data-tk-claim]');
+        if(clm){ e.stopPropagation(); self.claimTask(clm.dataset.tkClaim, g); return; }
         /* 卡片上的 💬/🕘/✏️/换负责人 走原有 data-gd-* 处理器，别再顺带选中卡片 */
         if(el.closest('[data-gd-disc],[data-gd-history],[data-gd-edit],[data-gd-owner]')) return;
         const op = el.closest('[data-tk-open]');
@@ -1175,6 +1287,13 @@ function actions(kind,id,extra) {
       box.addEventListener('dblclick', function(e){
         const op = e.target.closest('[data-tk-open]');
         if(op){ e.preventDefault(); g.openEditor('devTask', op.dataset.tkOpen); }
+      });
+      /* v3-21：右键卡片 = 一个菜单解决 编辑/讨论/历史/换列/复制/加入/删除 */
+      box.addEventListener('contextmenu', function(e){
+        const card = e.target.closest('[data-tk-card]');
+        if(!card) return;
+        e.preventDefault();
+        self.cardMenu(card, card.dataset.tkCard, e.clientX, e.clientY, g);
       });
       box.addEventListener('change', function(e){
         const el = e.target;
@@ -1864,6 +1983,7 @@ const GameDev = {
   function render(){
     if(!root)return;
     closeMention();
+    closeMenu();
     migrateMemberNames();
     applyCloudMemberNames();
     if(MODE==='legacy'){if(GameDev._clock)clearInterval(GameDev._clock);renderLegacy();return;}
@@ -2762,6 +2882,25 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   @media(max-width:640px){.tk-lane-bd{grid-template-columns:1fr}.tk-proj-hd .sum{display:none}}
   @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}.card:hover,.gd-card:hover,.gd-task:hover{transform:none}}
 
+  /* ===== v3-21 · 状态点换列 / 卡片右键菜单 / 我来做认领 ===== */
+  .tk-stbtn{width:9px;height:9px;border-radius:50%;border:none;padding:0;cursor:pointer;flex:0 0 auto;margin-top:4px;position:relative;transition:transform .14s}
+  .tk-stbtn:hover{transform:scale(1.4)}
+  .tk-stbtn:after{content:'';position:absolute;inset:-6px}
+  .tb-claim{font-size:9.5px;border:1px dashed var(--card-border);border-radius:5px;padding:0 5px;background:none;color:var(--muted);
+    cursor:pointer;font-family:inherit;line-height:1.8;white-space:nowrap;flex:0 0 auto;transition:.14s}
+  .tb-claim:hover{border-style:solid;border-color:var(--accent);color:var(--accent)}
+  .tb-menu{position:fixed;z-index:9998;background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;
+    box-shadow:0 16px 44px rgba(0,0,0,.45);padding:4px;min-width:168px}
+  .tb-menu-hd{font-size:9.5px;color:var(--muted);padding:4px 9px 5px;letter-spacing:.02em}
+  .tb-menu-i{display:flex;align-items:center;gap:8px;width:100%;border:none;background:none;color:var(--text);font:inherit;
+    font-size:12px;padding:6px 9px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;line-height:1.5}
+  .tb-menu-i:hover{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+  .tb-menu-i .ic{width:15px;text-align:center;flex:0 0 auto;font-size:11px;opacity:.9}
+  .tb-menu-i .d{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .tb-menu-i .ck{margin-left:auto;color:var(--accent);font-weight:800;font-size:11px}
+  .tb-menu-i.danger{color:#f87171}
+  .tb-menu-i.danger:hover{background:color-mix(in srgb,#ef4444 16%,transparent)}
+  .tb-menu .sp{height:1px;background:var(--card-border);margin:4px 6px}
   /* ===== v3-19 · @ 成员选择器 / 多人负责人 / 讨论名字上色 ===== */
   .tb-ment{position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--card-border);border-radius:11px;
     box-shadow:0 14px 38px rgba(0,0,0,.42);padding:5px;min-width:172px;max-width:280px}
