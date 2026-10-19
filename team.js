@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.4.4-20261015
+   team.js —— UE 团队看板「植入工具」  v2.13.0-20261019
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.12.1-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.13.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -1341,23 +1341,242 @@ function actions(kind,id,extra) {
           + '<div class="tk-rbtns"><button class="tk-btn pri" style="width:100%" data-tk-edit="'+esc(t.id)+'">完整编辑</button></div>';
         return s + '</div>';
       }
-      /* 今日 */
-      const live = list.filter(t=>t.status!=='done');
-      const over = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).sort((a,b)=>this.daysTo(a.dueDate)-this.daysTo(b.dueDate));
-      const td = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)===0);
-      const soon = live.filter(t=>t.dueDate && this.daysTo(t.dueDate)>0 && this.daysTo(t.dueDate)<=2).sort((a,b)=>this.daysTo(a.dueDate)-this.daysTo(b.dueDate));
-      const blocked = live.filter(t=>{const d=t.dependsOn&&this.find(all,t.dependsOn);return d&&d.status!=='done';});
-      const sec = (title, arr, cls) => !arr.length ? '' : '<div class="tk-rsec">'+title+' · '+arr.length+'</div>'
-        + arr.map(t=>'<div class="tk-rrow '+(cls||'')+'" data-tk-open="'+esc(t.id)+'">'+this.av(t.owner)+'<span class="t">'+esc(t.title)+'</span>'+this.due(t)+'</div>').join('');
-      let s = '<h3>📌 今天</h3>';
-      s += sec(overWord(), over, toneMode()==='soft' ? '' : 'over') + sec('今天到期', td, toneMode()==='soft' ? '' : 'today') + sec('2 天内', soon, '');
-      if(!over.length && !td.length && !soon.length) s += '<div class="tk-emptyst">今天没有到期，也没有'+overWord()+' 🎉</div>';
-      if(blocked.length) s += '<div class="tk-rsec">被前置挡住 · '+blocked.length+'</div>'
-        + blocked.map(t=>'<div class="tk-rrow" data-tk-open="'+esc(t.id)+'"><span style="color:#f5a524;font-size:10px">⛓</span><span class="t">'+esc(t.title)+'</span>'+this.av(t.owner)+'</div>').join('');
-      s += '<div class="tk-rsec">怎么用</div><div style="font-size:11px;color:var(--muted);line-height:1.75">'
-        + '单击卡片 → 这栏切「任务详情」；<b>双击标题</b>就地改名，双击卡片别处开编辑弹窗；点底部 💬 那行直接回复，子任务勾选即时保存。</div>';
+      /* 今日更新（v2.13.0 · 61/70/71/73/76/79） */
+      return this.todayUpdate(g, all);
+    },
+    /* ============================================================
+       v2.13.0 · 今日更新
+       ------------------------------------------------------------
+       数据源：stamp() 给每条记录写的 _fields{字段:{t,by}}，跟着记录
+       走、跨设备同步，不依赖会话内 LOG —— 所以「今天谁动了哪个字段」
+       是可靠的，换台机器打开也对得上。
+         61 一条任务一行（同任务多次改动聚合成一条，标次数）
+         70 只显示今天的（更早的收进折叠，默认不占屏）
+         71 一键复制今日摘要（纯文本，直接粘微信）
+         73 摘要卡（360px 一屏一张，深浅两版，专门截图）
+         76 变更类型图标化（新建/换列/子任务/讨论/编辑）
+         79 新建与改动分开（「今天新建 N 个」独立一组）
+       ============================================================ */
+    uTime(ms){ const d=new Date(ms||0); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); },
+    uDay(ms){ const d=new Date(ms||0); return (d.getMonth()+1)+'-'+('0'+d.getDate()).slice(-2); },
+    uWho(id){ const r=roleOf(id); return r?r.n:'有人'; },
+    uType(keys, disc, isNew){
+      if(isNew)                       return {k:'new', n:'新建',   c:'#10b981', i:'＋'};
+      if(keys.indexOf('status')>=0)   return {k:'move',  n:'换列',   c:'#f5a524', i:'→'};
+      if(keys.indexOf('subtasks')>=0) return {k:'sub',  n:'子任务', c:'#e879f9', i:'☑'};
+      if(keys.length)                 return {k:'edit', n:'编辑', c:'#667eea', i:'✎'};
+      if(disc)                        return {k:'discuss',n:'讨论', c:'#60a5fa', i:'💬'};
+      return {k:'edit', n:'编辑', c:'#667eea', i:'✎'};
+    },
+    uReadMap(){
+      if(this._uRead) return this._uRead;
+      try { return JSON.parse(localStorage.getItem(SYNC_PREFIX+'tread_'+CONFIG.me)||'{}')||{}; } catch(e) { return {}; }
+    },
+    uMarkRead(id){
+      const r=(this._uRows||[]).filter(function(x){return x.t.id===id;})[0];
+      if(!r) return;
+      const m=this.uReadMap(); m[id]=r.last; this._uRead=m;
+      try { localStorage.setItem(SYNC_PREFIX+'tread_'+CONFIG.me, JSON.stringify(m)); } catch(e) {}
+    },
+    /* 扫今天的更新 —— 一条任务一行 */
+    uScan(all){
+      const mid = new Date(D.today()+'T00:00:00').getTime();
+      const rows = [];
+      (all||[]).forEach(function(t){
+        const f = t._fields || {};
+        let last = 0, by = '', keys = [];
+        Object.keys(f).forEach(function(k){
+          const ft = f[k] && f[k].t;
+          if(!ft) return;
+          if(ft >= mid){ keys.push(k); if(ft > last){ last = ft; by = f[k].by || ''; } }
+        });
+        const ut = t._ut || t.updatedAt || 0;
+        if(!keys.length && ut >= mid){ last = ut; by = t.updatedBy || ''; }
+        const ds = DISCUSS[t.id] || [];
+        const dl = ds[ds.length-1];
+        const disc = (dl && (dl.t||0) >= mid) ? dl : null;
+        if(disc) keys = keys.filter(function(k){ return k !== '__disc'; });
+        /* 只回了讨论、字段没动，也算今天有更新 */
+        if(!last && disc){ last = disc.t; by = disc.u || ''; }
+        if(!last) return;
+        if(disc && (disc.t||0) > last){ last = disc.t; by = disc.u || by; }
+        /* 新建的记录没有 updatedBy，by 要兜底到 recorder，否则会被当成「自己改的」 */
+        rows.push({ t:t, last:last, by:(by || t.updatedBy || t.recorder || CONFIG.me), keys:keys, disc:disc, isNew:(t.createdAt||0) >= mid });
+      });
+      rows.sort(function(a,b){ return b.last-a.last; });
+      return rows;
+    },
+    /* 更早的（昨天及以前），方案 70 */
+    uOlder(all){
+      const mid = new Date(D.today()+'T00:00:00').getTime();
+      const out = [];
+      (all||[]).forEach(function(t){
+        const ut = t._ut || t.updatedAt || 0;
+        if(ut && ut < mid && t.status !== 'done') out.push({ t:t, last:ut });
+      });
+      out.sort(function(a,b){ return b.last-a.last; });
+      return out.slice(0,6);
+    },
+    /* 字段 → 当前值（摘要里用） */
+    uVal(t,k){
+      if(k==='status')   return this.stName(t.status);
+      if(k==='owner')    return this.ownerName(t.owner);
+      if(k==='priority') return ({critical:'P0',high:'P1',mid:'P2',low:'P3'})[t.priority] || t.priority || '';
+      if(k==='dueDate')  return t.dueDate || '未排期';
+      if(k==='title')    return t.title || '';
+      if(k==='subtasks'){
+        const a = Array.isArray(t.subtasks) ? t.subtasks : [];
+        return a.filter(function(x){return x.done;}).length + '/' + a.length + ' 步';
+      }
+      if(k==='dependsOn') return t.dependsOn ? '有前置' : '';
+      return '';
+    },
+    uLabels(keys){
+      return (keys||[]).map(function(k){ return TBoard.uFieldCn(k); }).filter(Boolean);
+    },
+    /* fieldLabel 只认部分字段，这里补齐今日更新会用到的全部 */
+    uFieldCn(k){
+      var FL = { title:'标题', status:'状态', owner:'负责人', priority:'优先级', dueDate:'交期',
+                 subtasks:'子任务', stage:'阶段', soft:'主要软件', path:'UE 路径', dependsOn:'前置',
+                 milestoneId:'里程碑', area:'分区', category:'分类', description:'说明' };
+      if (FL[k]) return FL[k];
+      var v = (typeof fieldLabel === 'function') ? fieldLabel(k) : '';
+      return (v && v !== k) ? v : k;
+    },
+    /* 摘要卡里的「一条时间线」 */
+    uTimeline(r){
+      const f = r.t._fields || {};
+      const mid = new Date(D.today()+'T00:00:00').getTime();
+      const items = [];
+      Object.keys(f).forEach(function(k){
+        const ft = f[k] && f[k].t;
+        if(ft && ft >= mid) items.push({ t:ft, k:k, by:f[k].by });
+      });
+      items.sort(function(a,b){ return a.t-b.t; });
+      const self = this;
+      let h = items.map(function(x){
+        const v = self.uVal(r.t, x.k);
+        return '<div class="tk-uli"><span class="tm">'+self.uTime(x.t)+'</span>'+esc(self.uWho(x.by))+' 改了 '+esc(self.uFieldCn(x.k))+(v?' → '+esc(String(v).slice(0,18)):'')+'</div>';
+      }).join('');
+      if(r.disc) h += '<div class="tk-uli"><span class="tm">'+this.uTime(r.disc.t)+'</span>'+esc(this.uWho(r.disc.u))+'：'+esc(String(r.disc.x).slice(0,46))+'</div>';
+      return h || '<div class="tk-uli">没有字段级记录</div>';
+    },
+    /* 面板主体 */
+    todayUpdate(g, all){
+      this._uAll = all || [];
+      const rows = this.uScan(this._uAll);
+      this._uRows = rows;
+      const rd = this.uReadMap();
+      const self = this;
+      const isUnread = function(r){ return r.last > (rd[r.t.id]||0) && r.by !== CONFIG.me; };
+      const unread = rows.filter(isUnread).length;
+      const news = rows.filter(function(r){ return r.isNew; });
+      const chgs = rows.filter(function(r){ return !r.isNew; });
+      const seenIds = {};
+      rows.forEach(function(r){ seenIds[r.t.id] = 1; });
+      const older = this.uOlder(this._uAll).filter(function(o){ return !seenIds[o.t.id]; });
+
+      const rowHtml = function(r){
+        const T = self.uType(r.keys, r.disc, r.isNew);
+        const n = r.keys.length + (r.disc?1:0);
+        const labs = self.uLabels(r.keys).slice(0,2);
+        const mt = self.uTime(r.last)+' · '+self.uWho(r.by)+(labs.length?' · '+labs.join('、'):'');
+        return '<div class="tk-urow'+(isUnread(r)?' unread':'')+'" data-tk-uid="'+esc(r.t.id)+'">'
+          + '<div class="tk-uhd">'
+          +   '<span class="tk-utype" style="color:'+T.c+';border-color:'+T.c+'66">'+T.i+' '+T.n+'</span>'
+          +   '<span class="tk-utt">'+esc(r.t.title)+'</span>'
+          +   (n>1?'<span class="tk-un">'+n+'</span>':'')
+          + '</div>'
+          + '<div class="tk-umt">'+esc(mt)+'</div>'
+          + '<div class="tk-utl">'+self.uTimeline(r)+'</div>'
+          + '</div>';
+      };
+
+      let s = '<h3>🔔 今日更新'+(rows.length?'<span class="tk-ubadge">'+rows.length+'</span>':'')+'</h3>';
+      if(!rows.length){
+        s += '<div class="tk-emptyst">今天还没有人动过任务。改一次状态、加一步子任务，这里就会出现。</div>';
+      } else {
+        s += '<div class="tk-ucnt">今天 <b>'+rows.length+'</b> 条改动'+(unread?' · <b class="hl">'+unread+'</b> 条你没看过':' · 你都看过了')+'</div>';
+        if(news.length) s += '<div class="tk-rsec">今天新建 · '+news.length+'</div>' + news.map(rowHtml).join('');
+        if(chgs.length) s += '<div class="tk-rsec">今天改动 · '+chgs.length+'</div>' + chgs.map(rowHtml).join('');
+      }
+      if(older.length){
+        s += '<details class="tk-uolder"><summary>更早的更新 · '+older.length+'</summary>'
+          + older.map(function(o){
+              return '<div class="tk-uold" data-tk-open="'+esc(o.t.id)+'">'+esc(o.t.title)+'<span>'+self.uDay(o.last)+'</span></div>';
+            }).join('')
+          + '</details>';
+      }
+      s += '<div class="tk-uact">'
+        + '<button type="button" class="tk-btn" data-tk-ucopy title="复制成一段能直接粘给同事的话">⧉ 复制摘要</button>'
+        + '<button type="button" class="tk-btn" data-tk-ucard title="生成一张适合截图的卡片">▣ 摘要卡</button>'
+        + '<button type="button" class="tk-btn tk-uhelp" data-tk-uhelp title="怎么用">?</button>'
+        + '</div>';
       return s;
     },
+    /* 71 · 纯文本摘要 */
+    digestText(all){
+      const rows = this.uScan(all || D.devAll('devTask'));
+      const self = this;
+      const lines = ['【团队看板 · '+D.today().slice(5)+' 更新】'];
+      if(!rows.length) lines.push('（今天没有更新）');
+      rows.forEach(function(r){
+        const T = self.uType(r.keys, r.disc, r.isNew);
+        let tail = r.keys.map(function(k){
+          const label = self.uFieldCn(k);
+          const v = self.uVal(r.t, k);
+          return label+(v?' → '+v:'');
+        }).join('、');
+        if(!tail && r.disc) tail = '讨论：'+String(r.disc.x).slice(0,32);
+        if(!tail) tail = T.n;
+        lines.push('· '+r.t.title+'（'+self.uWho(r.by)+' '+self.uTime(r.last)+'）'+tail);
+      });
+      if(rows.length) lines.push('— 共 '+rows.length+' 条，其中新建 '+rows.filter(function(r){return r.isNew;}).length+' 条 · 来自 NIKO 团队看板');
+      return lines.join('\n');
+    },
+    /* 73 · 摘要卡浮层 */
+    openDigestCard(all){
+      const self = this;
+      const old = root.querySelector('.tk-dgm');
+      if(old) old.remove();
+      const rows = this.uScan(all || D.devAll('devTask'));
+      const body = rows.length ? rows.map(function(r){
+        const T = self.uType(r.keys, r.disc, r.isNew);
+        const labs = self.uLabels(r.keys);
+        const tail = labs.length ? labs.join('、') : (r.disc ? '讨论' : T.n);
+        return '<div class="tk-dgi"><i style="background:'+T.c+'"></i><span><b>'+esc(r.t.title)+'</b> · '
+          + esc(self.uWho(r.by))+' '+self.uTime(r.last)+' · '+esc(tail)+'</span></div>';
+      }).join('') : '<div class="tk-dgi" style="opacity:.6">今天没有更新</div>';
+      const m = document.createElement('div');
+      m.className = 'tk-dgm';
+      m.innerHTML = '<div class="tk-dg" data-dg="dark">'
+        + '<div class="tk-dgh"><b>'+D.today().slice(5)+' 团队更新</b><span>'+rows.length+' 条</span></div>'
+        + body
+        + '<div class="tk-dgf">NIKO 团队看板 · '+self.uTime(now())+'</div>'
+        + '</div>'
+        + '<div class="tk-dgb">'
+        +   '<button type="button" class="tk-btn" data-dg-theme>切换深浅</button>'
+        +   '<button type="button" class="tk-btn" data-dg-copy>复制文字</button>'
+        +   '<button type="button" class="tk-btn" data-dg-close>关闭</button>'
+        + '</div>';
+      root.appendChild(m);
+      m.addEventListener('click', function(e){
+        if(e.target === m || e.target.closest('[data-dg-close]')){ m.remove(); return; }
+        if(e.target.closest('[data-dg-theme]')){
+          const card = m.querySelector('.tk-dg');
+          card.dataset.dg = card.dataset.dg === 'dark' ? 'light' : 'dark';
+          return;
+        }
+        if(e.target.closest('[data-dg-copy]')){
+          const txt = self.digestText(all || D.devAll('devTask'));
+          if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt);
+          else { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(x){} document.body.removeChild(ta); }
+          toast('摘要已复制','ok');
+        }
+      });
+      return m;
+    },
+
     /* ---- 主渲染 ---- */
     html(g, tasks, all, p){
       if(this.view === 'table'){
@@ -1385,6 +1604,40 @@ function actions(kind,id,extra) {
     /* ---- 事件 ---- */
     bind(box, g, App){
       const self = this;
+      /* v2.13.0 · 今日更新：点条目展开时间线 + 标已读 / 复制摘要 / 摘要卡 / 帮助 */
+      box.addEventListener('click', function(e){
+        const u = e.target.closest('[data-tk-uid]');
+        if(u){
+          e.stopPropagation();
+          u.classList.toggle('open');
+          u.classList.remove('unread');
+          self.uMarkRead(u.dataset.tkUid);
+          return;
+        }
+        if(e.target.closest('[data-tk-ucopy]')){
+          e.stopPropagation();
+          const txt = self.digestText(self._uAll);
+          if(navigator.clipboard && navigator.clipboard.writeText){
+            navigator.clipboard.writeText(txt).then(function(){ toast('摘要已复制，可以直接粘给同事','ok'); }, function(){ self._fbCopy(txt); });
+          } else self._fbCopy(txt);
+          return;
+        }
+        if(e.target.closest('[data-tk-ucard]')){
+          e.stopPropagation();
+          self.openDigestCard(self._uAll);
+          return;
+        }
+        if(e.target.closest('[data-tk-uhelp]')){
+          e.stopPropagation();
+          toast('点一条看它今天被改了什么；左侧蓝线 = 你还没看过。单击卡片切任务详情，双击标题就地改名。','ok');
+          return;
+        }
+      });
+      self._fbCopy = self._fbCopy || function(t){
+        const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select();
+        try{ document.execCommand('copy'); toast('摘要已复制','ok'); }catch(x){ toast('复制失败，手动选一下','warn'); }
+        document.body.removeChild(ta);
+      };
       /* v3-22：删子任务按钮单独挂一个更早的 capture 监听 —— 它长在 <label> 里，
          主委托链容易被上层分支先吃掉，这里第一顺位拦，命中就停。 */
       box.addEventListener('click', function(e){
@@ -3053,6 +3306,44 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tk-rail h3 .bx:hover{border-color:var(--accent);color:var(--accent)}
   .tk-rrow{display:flex;align-items:center;gap:7px;padding:5px 7px;border-radius:8px;font-size:12px;cursor:pointer;margin-bottom:4px;border:1px solid transparent}
   .tk-rrow:hover{background:var(--card-bg-2)}
+  /* v2.13.0 · 今日更新面板 */
+  .tk-ubadge{font-size:9.5px;padding:0 5px;border-radius:8px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:800;margin-left:5px;vertical-align:1px}
+  .tk-ucnt{font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:1px}
+  .tk-ucnt b{color:var(--text)}
+  .tk-ucnt b.hl{color:#f5a524}
+  .tk-urow{position:relative;padding:6px 7px 6px 9px;border-radius:8px;cursor:pointer;border:1px solid transparent;margin-bottom:2px}
+  .tk-urow:hover{background:var(--card-bg-2)}
+  .tk-urow.unread::before{content:"";position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:2px;background:var(--accent)}
+  .tk-uhd{display:flex;align-items:center;gap:5px}
+  .tk-utype{font-size:9px;padding:0 4px;border-radius:4px;border:1px solid;line-height:15px;flex:0 0 auto;white-space:nowrap}
+  .tk-utt{font-size:12px;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-un{font-size:9.5px;padding:0 4px;border-radius:7px;background:var(--card-bg-2);border:1px solid var(--card-border);color:var(--muted);flex:0 0 auto}
+  .tk-umt{font-size:10px;color:var(--muted);margin-top:2px;opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-utl{display:none;margin-top:5px;padding-top:5px;border-top:1px dashed var(--card-border)}
+  .tk-urow.open .tk-utl{display:block}
+  .tk-uli{font-size:10px;color:var(--muted);line-height:1.7}
+  .tk-uli .tm{opacity:.7;margin-right:4px;font-variant-numeric:tabular-nums}
+  .tk-uolder{margin-top:8px;border-top:1px solid var(--card-border);padding-top:6px}
+  .tk-uolder summary{font-size:10.5px;color:var(--muted);cursor:pointer;list-style:none}
+  .tk-uolder summary::-webkit-details-marker{display:none}
+  .tk-uold{font-size:10.5px;color:var(--muted);padding:3px 2px;display:flex;gap:6px;cursor:pointer}
+  .tk-uold:hover{color:var(--text)}
+  .tk-uold span{margin-left:auto;opacity:.7}
+  .tk-uact{display:flex;gap:5px;margin-top:9px;padding-top:8px;border-top:1px solid var(--card-border)}
+  .tk-uact .tk-btn{font-size:10.5px;padding:3px 8px}
+  .tk-uact .tk-uhelp{margin-left:auto;padding:3px 7px}
+  .tk-dgm{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;z-index:9999;padding:16px}
+  .tk-dg{width:360px;max-width:92vw;max-height:72vh;overflow:auto;border-radius:14px;padding:14px 15px;box-shadow:0 14px 40px rgba(0,0,0,.45);font-size:12px;line-height:1.6}
+  .tk-dg[data-dg="dark"]{background:#1b1d27;color:#e8eaf2;border:1px solid #2c2f3d}
+  .tk-dg[data-dg="light"]{background:#fff;color:#1b1e28;border:1px solid #e2e6f0}
+  .tk-dgh{display:flex;align-items:baseline;gap:8px;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid rgba(128,128,128,.25)}
+  .tk-dgh b{font-size:13.5px}
+  .tk-dgh span{font-size:10.5px;opacity:.65;margin-left:auto}
+  .tk-dgi{display:flex;gap:6px;font-size:11.5px;padding:3px 0;align-items:flex-start}
+  .tk-dgi i{width:5px;height:5px;border-radius:50%;margin-top:6px;flex:0 0 auto;display:block}
+  .tk-dgi b{font-weight:650}
+  .tk-dgf{margin-top:9px;padding-top:7px;border-top:1px dashed rgba(128,128,128,.3);font-size:10px;opacity:.6}
+  .tk-dgb{display:flex;gap:6px}
   .tk-rrow.over{background:color-mix(in srgb,#ef4444 8%,transparent);border-color:#ef444440}
   .tk-rrow.today{background:color-mix(in srgb,var(--accent) 10%,transparent);border-color:color-mix(in srgb,var(--accent) 35%,transparent)}
   .tk-rrow .t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -4052,6 +4343,9 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     setLock(cardId, by) { if (by) LOCKED[cardId] = { by, at: now() }; else delete LOCKED[cardId]; render(); return api; },
     _autoNextMs() { return nextAutoMs; },   // v2.4.2 测试钩子：当前自适应轮询间隔
     get _ROLE() { return ROLE; },           // v2.4.4 测试钩子：成员表（名字改了测试自动跟随，不再硬编码）
+    get _uDigest() { return TBoard.digestText(D.devAll('devTask')); },   // v2.13.0 测试钩子：今日更新摘要文本
+    get _uRows() { return TBoard.uScan(D.devAll('devTask')); },          // v2.13.0 测试钩子：今日更新行
+    _uMarkAllRead() { (TBoard._uRows||[]).forEach(function(r){ TBoard.uMarkRead(r.t.id); }); render(); return api; },
     on,
     mount(sel) {
       hostEl = typeof sel === 'string' ? document.querySelector(sel) : sel;
