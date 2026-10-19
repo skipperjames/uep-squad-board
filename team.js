@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.8.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.9.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -62,8 +62,47 @@
     b:  { n: '邢锦', c: '#e879f9', r: '美术TA' }
   };
   /* v2.4.4：成员名字只准活在这里 —— 全代码其余地方一律用派生变量，改名字只动这一行 */
-  const MENTION_HINT = '@' + Object.values(ROLE).map(function(r){return r.n;}).join(' @');
-  const MENTION_RE = new RegExp('@(' + Object.values(ROLE).map(function(n){return n.n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');}).join('|') + ')', 'g');
+  /* ---------- v3-19 · 成员 / 多人负责人 公共件 ---------- */
+  /* 一条记录可以有多个负责人：存储用「逗号串」（'me,a'），全代码统一走 ownerIds 解析，
+     这样老数据（单值）不用迁移、新数据天然兼容。 */
+  function ownerIds(v) { return String(v == null ? '' : v).split(/[,，;；\s]+/).filter(Boolean); }
+  function ownerFirst(v) { return ownerIds(v)[0] || ''; }
+  /* 讨论 / 提醒里的人：色点 + 人色名字 */
+  function whoName(id) {
+    const r = roleOf(id);
+    return '<b class="tb-who" style="color:' + esc(r.c) + '"><i style="background:' + esc(r.c) + '"></i>' + esc(r.n) + '</b>';
+  }
+  /* 成员名以「团队数据」为真相源（以前只存本机 localStorage → 换台机器又叫回默认名） */
+  function applyCloudMemberNames() {
+    const m = EXTRA && EXTRA.members;
+    if (!m) return;
+    Object.keys(m).forEach(function (k) { if (ROLE[k] && m[k]) ROLE[k].n = String(m[k]); });
+  }
+  /* 一次性迁移：云端还没存过名字、但本机改过名（NIKO 的 niko_team_roles）→ 搬进团队数据。
+     只搬「和默认名不一样」的那几条，之后云端就是唯一真相源。 */
+  let memberMigrated = false;
+  function migrateMemberNames() {
+    if (memberMigrated) return;
+    memberMigrated = true;
+    if (EXTRA && EXTRA.members && Object.keys(EXTRA.members).length) return;
+    let local = {};
+    try { local = JSON.parse(localStorage.getItem('niko_team_roles') || '{}') || {}; } catch (e) { return; }
+    const names = {}; let dirty = false;
+    Object.keys(ROLE).forEach(function (k) {
+      const v = local[k] && local[k].n;
+      if (v && String(v) !== String(ROLE[k].n)) { names[k] = String(v); dirty = true; }
+    });
+    if (!dirty) return;
+    EXTRA.members = names;
+    try { save(); } catch (e) {}
+  }
+  /* @ 提示文案与高亮正则必须是「算出来的」，不能启动时固化 —— 否则改名后提示还是旧名字 */
+  function mentionHint() { return '@' + Object.values(ROLE).map(function (r) { return r.n; }).join(' @'); }
+  function mentionRe() {
+    return new RegExp('@(' + Object.values(ROLE).map(function (r) {
+      return String(r.n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }).join('|') + ')', 'g');
+  }
   const SYNC_PREFIX = 'niko_team_';
 
   let CONFIG = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
@@ -119,7 +158,7 @@
   const fieldLabel = f => ({ prog:'进度', note:'任务说明', owner:'负责人', status:'状态', pri:'优先级', due:'交付日', name:'名称',__timeResult:'计时结束与耗时',title:'标题',description:'说明',acceptance:'验收标准',dependsOn:'前置任务',category:'工作分类' }[f] || f);
   const fieldVal = (f, v) => {
     if (f === 'status') return ST[v] ? ST[v].l : v;
-    if (f === 'owner') return (ROLE[v] || {}).n || v;
+    if (f === 'owner') return ownerIds(v).map(function(id){return (ROLE[id]||{}).n||id;}).join('、') || '未指派';
     if (f === 'prog') return v + '%';
     if (f === 'due') return dstr(v);
     return String(v);
@@ -296,6 +335,88 @@
     hit.forEach(function(k){M[k]=M[k]||[];M[k].push({t:now(),by:CONFIG.me,cid:cardId||'',x:String(text).slice(0,140)});if(M[k].length>30)M[k].shift();added.push(ROLE[k].n);});
     return added;
   }
+  /* ---------- v3-19 · @ 成员选择器 ----------
+     原来只能在框里手打「@邢锦」，错一个字就提醒不到（notifyMentions 按名字精确匹配）。
+     现在输入 @ 直接弹全组成员：↑↓ 选、Enter 或点击确认，插进去的是「当前的显示名」。 */
+  let MP = null, MPctx = null;
+  function closeMention() { if (MP) { try { MP.remove(); } catch (e) {} MP = null; } MPctx = null; }
+  function mentionToken(el) {
+    const pos = el.selectionStart == null ? String(el.value || '').length : el.selectionStart;
+    const before = String(el.value || '').slice(0, pos);
+    const at = before.lastIndexOf('@');
+    if (at < 0) return null;
+    const seg = before.slice(at + 1);
+    if (/[\s@]/.test(seg)) return null;            /* @ 后面已经有空格 → 这个 @ 写完了 */
+    return { start: at, end: pos, q: seg };
+  }
+  function bindMentionPicker(scope) {
+    (scope || root).querySelectorAll('[data-mention]').forEach(function (el) {
+      if (el.__mpBound) return;
+      el.__mpBound = 1;
+      function paint() {
+        if (!MP || !MPctx || MPctx.el !== el) return;
+        const items = [].slice.call(MP.querySelectorAll('.tb-ment-i'));
+        items.forEach(function (b, i) { b.classList.toggle('on', i === MPctx.idx); });
+        const cur = items[MPctx.idx];
+        if (cur) { try { cur.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+      }
+      function pick(id) {
+        const c = (MPctx && MPctx.el === el) ? MPctx : null;
+        if (!c) return;
+        const name = String(roleOf(id).n);
+        const v = String(el.value || '');
+        el.value = v.slice(0, c.start) + '@' + name + ' ' + v.slice(c.end);
+        const caret = c.start + name.length + 2;
+        closeMention();
+        try { el.focus(); el.setSelectionRange(caret, caret); } catch (e) {}
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      function show() {
+        const c = mentionToken(el);
+        if (!c) { if (MPctx && MPctx.el === el) closeMention(); return; }
+        const q = c.q.toLowerCase();
+        const html = Object.keys(ROLE).map(function (k) {
+          const r = ROLE[k];
+          const hit = !q || String(r.n).toLowerCase().indexOf(q) >= 0 || String(r.r || '').toLowerCase().indexOf(q) >= 0;
+          if (!hit) return '';
+          return '<button type="button" class="tb-ment-i" data-ment-pick="' + esc(k) + '">'
+            + '<i style="background:' + esc(r.c) + '"></i><b>' + esc(r.n) + '</b><em>' + esc(r.r || '') + '</em></button>';
+        }).join('');
+        if (!html) { closeMention(); return; }
+        if (!MP) {
+          /* 必须挂在 .t-root 里：6 套主题的 CSS 变量都定义在它的 data-th 上，
+             挂到 shadowRoot 会拿不到 --card-bg → 浮层变成透明的 */
+          const host = root.querySelector('.t-root') || root;
+          MP = document.createElement('div'); MP.className = 'tb-ment'; host.appendChild(MP);
+        }
+        MP.innerHTML = '<div class="tb-ment-hd">选择成员 · ↑↓ 选，Enter 确认</div>' + html;
+        MPctx = { el: el, start: c.start, end: c.end, idx: 0 };
+        const rc = el.getBoundingClientRect();
+        MP.style.left = Math.round(Math.max(8, Math.min(rc.left, window.innerWidth - 300))) + 'px';
+        MP.style.width = Math.round(Math.max(184, Math.min(280, rc.width))) + 'px';
+        { /* 输入框在屏幕下半区（弹窗底部的讨论框就是）→ 往上弹，别盖住发送按钮 */
+          const mh = MP.offsetHeight || 150;
+          const up = (rc.top + 44 > window.innerHeight / 2) || (window.innerHeight - rc.bottom < mh + 16);
+          MP.style.top = Math.round(up ? Math.max(8, rc.top - mh - 6) : rc.bottom + 4) + 'px'; }
+        [].slice.call(MP.querySelectorAll('[data-ment-pick]')).forEach(function (b) {
+          b.addEventListener('mousedown', function (e) { e.preventDefault(); pick(b.dataset.mentPick); });
+        });
+        paint();
+      }
+      el.addEventListener('input', show);
+      el.addEventListener('click', show);
+      el.addEventListener('keydown', function (e) {
+        if (!MP || !MPctx || MPctx.el !== el) return;
+        const items = [].slice.call(MP.querySelectorAll('.tb-ment-i'));
+        if (!items.length) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); MPctx.idx = (MPctx.idx + 1) % items.length; paint(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); MPctx.idx = (MPctx.idx - 1 + items.length) % items.length; paint(); }
+        else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); pick(items[MPctx.idx].dataset.mentPick); }
+        else if (e.key === 'Escape') { e.preventDefault(); closeMention(); }
+      });
+      el.addEventListener('blur', function () { setTimeout(closeMention, 200); });
+    });
+  }
   // 拉取后检查新到提醒（每人每次会话只 toast 增量）
   let lastMentToast=0;
   function pingMentions(){
@@ -319,8 +440,8 @@
     const cardBtn=list.length?'<button class="btn" id="mentClearAll">全部标为已读</button>':'';
     DevModal.openModal({title:'🔔 @我的提醒',html:(list.length?'<div class="ment-list">'+list.map(function(m){
       const title=findDevTitle(m.cid);
-      return '<div class="ment-i"><p><b>'+esc(roleOf(m.by).n)+'</b> 在「'+esc(title||'已删除的卡片')+'」@了你 · <span class="tm">'+esc(dstr(m.t))+' '+fmtT(m.t)+'</span></p><p class="ment-x">'+esc(m.x)+'</p>'+(m.cid?'<button type="button" class="btn btn-sm" data-ment-jump="'+esc(m.cid)+'">跳到那张卡 →</button>':'')+'</div>';
-    }).join('')+'</div>'+cardBtn:'<div class="mut" style="text-align:center;padding:24px 0">还没有人 @你 · 在讨论里输入 '+esc(MENTION_HINT)+' 就能提醒对方</div>'),mount:function(body){
+      return '<div class="ment-i"><p>'+whoName(m.by)+' 在「'+esc(title||'已删除的卡片')+'」@了你 · <span class="tm">'+esc(dstr(m.t))+' '+fmtT(m.t)+'</span></p><p class="ment-x">'+esc(m.x)+'</p>'+(m.cid?'<button type="button" class="btn btn-sm" data-ment-jump="'+esc(m.cid)+'">跳到那张卡 →</button>':'')+'</div>';
+    }).join('')+'</div>'+cardBtn:'<div class="mut" style="text-align:center;padding:24px 0">还没有人 @你 · 在讨论里输入 '+esc(mentionHint())+' 就能提醒对方</div>'),mount:function(body){
       body.onclick=function(e){
         const j=e.target.closest('[data-ment-jump]');
         if(j){const cid=j.dataset.mentJump;let t=null,isTask=false;Object.values(DEV_KEYS).forEach(function(k){const r=(DEV[k]||[]).find(x=>x.id===cid);if(r){t=r;isTask=(k==='devTasks');}});writeSeen(now());updateBell();App.closeModal();
@@ -397,14 +518,14 @@
   function openDevDiscussion(kind,id){
     const record=devRows(kind).find(r=>r.id===id);if(!record)return;
     const key='discussion|'+id;
-    DevModal.openModal({title:'团队讨论 · '+(record.title||record.name||record.date),html:'<div class="disc">'+(DISCUSS[id]||[]).map(m=>'<p><b>'+esc(roleOf(m.u).n)+'</b> · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p style="white-space:pre-wrap">'+esc(m.x)+'</p>').join('')+'</div><form id="dev-disc-form" class="gd-form"><label class="gd-field gd-full"><span>发送给团队</span><textarea name="discussion" maxlength="20000">'+esc(localDrafts[key]||'')+'</textarea></label><button class="btn pri" type="submit">发送</button></form>',mount:body=>{
+    DevModal.openModal({title:'团队讨论 · '+(record.title||record.name||record.date),html:'<div class="disc">'+(DISCUSS[id]||[]).map(m=>'<p>'+whoName(m.u)+' · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p style="white-space:pre-wrap">'+esc(m.x)+'</p>').join('')+'</div><form id="dev-disc-form" class="gd-form"><label class="gd-field gd-full"><span>发送给团队</span><textarea name="discussion" data-mention maxlength="20000">'+esc(localDrafts[key]||'')+'</textarea></label><button class="btn pri" type="submit">发送</button></form>',mount:body=>{
       const form=body.querySelector('form'),input=form.querySelector('textarea');input.oninput=()=>{try{localDrafts[key]=input.value;saveDrafts();}catch(e){toast('草稿保存失败','warn');}};
       form.onsubmit=e=>{e.preventDefault();if(!input.value.trim())return;const before=clone(collectLocal());(DISCUSS[id]=DISCUSS[id]||[]).push({u:CONFIG.me,t:tick(),x:input.value.trim()});log('discuss',id,'开发记录讨论');const at=notifyMentions(input.value.trim(),id);try{save();delete localDrafts[key];try{saveDrafts();}catch(e){}DevModal.closeModal();render();updateBell();toast(at.length?'📨 已提醒 '+at.join('、'):'已发送到本机，等待同步');}catch(e){applyState(before);toast(e.message,'warn');}};
     }});
   }
   const DevModal={toast:msg=>toast(msg,'warn'),closeModal:()=>closeModal('genericModal'),openModal(opt){
     if(modalOptions?.beforeClose&&!modalOptions.beforeClose())return;
-    const modalBody=root.querySelector('#gmBody');modalBody.onclick=null;modalBody.oninput=null;modalOptions=opt;root.querySelector('#gmTitle').textContent=opt.title;root.querySelector('#gmBody').innerHTML=(opt.sub?'<p class="gd-note">'+opt.sub+'</p>':'')+opt.html;root.querySelector('#gmFoot').innerHTML='';openModal('genericModal');opt.mount?.(root.querySelector('#gmBody'));hydrateImages(root.querySelector('#gmBody'));
+    const modalBody=root.querySelector('#gmBody');modalBody.onclick=null;modalBody.oninput=null;modalOptions=opt;root.querySelector('#gmTitle').textContent=opt.title;root.querySelector('#gmBody').innerHTML=(opt.sub?'<p class="gd-note">'+opt.sub+'</p>':'')+opt.html;root.querySelector('#gmFoot').innerHTML='';openModal('genericModal');opt.mount?.(root.querySelector('#gmBody'));bindMentionPicker(root.querySelector('#gmBody'));hydrateImages(root.querySelector('#gmBody'));
   }};
 
 const D = DevData;
@@ -513,10 +634,10 @@ function actions(kind,id,extra) {
         + '</span>';
     },
     /* 头像 + 名字（只读；改负责人目前只对任务卡开口，别在这挂 data-gd-owner） */
-    who: function (id) {
-      if (!id) return '<span class="tk-own tk-own-ro"><span class="tk-k">未指派</span></span>';
-      const r = roleOf(id);
-      return '<span class="tk-own tk-own-ro">' + TBoard.av(id) + '<b>' + esc(r.n) + '</b></span>';
+    who: function (v) {
+      const ids = ownerIds(v);
+      if (!ids.length) return '<span class="tk-own tk-own-ro"><span class="tb-k">未指派</span></span>';
+      return '<span class="tk-own tk-own-ro">' + TBoard.av(v) + '<b>' + esc(TBoard.ownerName(v)) + '</b></span>';
     },
     /* 卡头：pill（P 级色）+ 标题 + 动作组 */
     head: function (pillCls, pillTxt, title, kind, id, nDisc, noDel) {
@@ -578,7 +699,7 @@ function actions(kind,id,extra) {
     stName(s){ return LABELS[s] || s; },
     stack(tasks, projectId, member){
       let list = tasks;
-      if(member) list = list.filter(t => t.owner === member);
+      if(member) list = list.filter(t => ownerIds(t.owner).indexOf(member) >= 0);
       if(this.kw) list = list.filter(t => JSON.stringify(t).toLowerCase().indexOf(this.kw.toLowerCase()) >= 0);
       return list;
     },
@@ -595,8 +716,19 @@ function actions(kind,id,extra) {
     /* v2.6.0：优先级统一成 P0–P3 四级（critical/high/mid/low），板/表/详情/编辑器用同一套说法 */
     pri(t){ return {critical:'P0',high:'P1',mid:'P2',low:'P3'}[t.priority] || 'P2'; },
     PRI4: [['critical','P0 阻断'],['high','P1 高'],['mid','P2 中'],['low','P3 低']],
-    av(id){ const r = ROLE[id] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'}; return '<i class="tk-av" title="'+esc(r.n)+'" style="background:'+esc(r.c)+'">'+esc(String(r.n).slice(0,1))+'</i>'; },
-    ownerName(id){ const r = ROLE[id] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'}; return r.n; },
+    av(v){
+      const ids = ownerIds(v);
+      if(!ids.length) return '<i class="tk-av" title="未指派" style="background:#94a3b8">?</i>';
+      let h = '';
+      ids.slice(0,2).forEach(function(id){ const r = ROLE[id]; if(!r) return; h += '<i class="tk-av" title="'+esc(r.n)+'" style="background:'+esc(r.c)+'">'+esc(String(r.n).slice(0,1))+'</i>'; });
+      if(ids.length > 2) h += '<i class="tk-av tk-av-more" title="'+esc(ids.length)+' 人">+'+(ids.length-2)+'</i>';
+      return h;
+    },
+    ownerName(v){
+      const ids = ownerIds(v);
+      if(!ids.length) return '未指派';
+      return ids.map(function(id){ return (ROLE[id]||{n:id}).n; }).join('、');
+    },
     bar(v,c){ return '<div style="flex:1 1 auto;height:5px;border-radius:3px;background:var(--card-border);overflow:hidden"><i style="display:block;height:100%;border-radius:3px;width:'+Math.max(0,Math.min(100,v||0))+'%;background:'+(c||'var(--accent)')+'"></i></div>'; },
     find(tasks,id){ return tasks.filter(t=>t.id===id)[0]; },
     /* ---- KPI（5 个数 + 总进度 + 成员负载） ---- */
@@ -615,7 +747,7 @@ function actions(kind,id,extra) {
         + '<i class="sep"></i><span class="pw">'+this.bar(pct)+'<span class="pct">'+pct+'% 完成（'+done+'/'+tasks.length+'）</span></span>'
         + '<i class="sep"></i><span class="lds">';
       Object.keys(ROLE).forEach(id=>{
-        const mine = live.filter(t=>t.owner===id);
+        const mine = live.filter(t=>ownerIds(t.owner).indexOf(id)>=0);
         const o2 = mine.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length;
         s += '<span class="ld'+(o2?' over':'')+'">'+this.av(id)+esc(ROLE[id].n)+' '+mine.length+(o2?' ⚠️'+o2:'')+'</span>';
       });
@@ -839,7 +971,9 @@ function actions(kind,id,extra) {
             + '<td class="tt frz"><span class="tk-pri '+this.pri(t)+'" style="margin-right:6px">'+this.pri(t)+'</span>'+esc(t.title)+'</td>'
             + op('status', this.stOrder().map(x=>[x,this.stName(x)]), t.status)
             + '<td class="num">'+esc(t.stage || '—')+'</td>'
-            + op('owner', Object.keys(ROLE).map(x=>[x,ROLE[x].n]), t.owner)
+            + (ownerIds(t.owner).length > 1
+                ? '<td class="num" title="多人负责人 —— 点任务名进卡片改">'+esc(this.ownerName(t.owner))+'</td>'
+                : op('owner', Object.keys(ROLE).map(x=>[x,ROLE[x].n]), t.owner))
             + op('priority', this.PRI4, t.priority)
             + '<td class="tk-ie"><input type="date" data-tk-ief="dueDate" data-tk-id="'+esc(t.id)+'" value="'+esc(t.dueDate||'')+'"></td>'
             + '<td style="white-space:nowrap">'+this.due(t)+'<span class="tk-saved" data-tk-saved="'+esc(t.id)+'">已存 ✓</span></td>'
@@ -918,7 +1052,7 @@ function actions(kind,id,extra) {
             + '</div>';
         }
         s += '<div class="tk-rsec">讨论 '+ds.length+'</div>';
-        s += ds.length ? ds.map(m=>'<div class="tk-msg">'+this.av(m.u)+'<div class="b"><div style="font-size:10.5px;color:var(--muted);margin-bottom:2px">'+esc(this.ownerName(m.u))+' · '+esc(fmtT(m.t))+'</div>'+esc(m.x)+'</div></div>').join('')
+        s += ds.length ? ds.map(m=>'<div class="tk-msg">'+this.av(m.u)+'<div class="b"><div class="tb-disc-n">'+whoName(m.u)+'<span style="opacity:.75">'+esc(fmtT(m.t))+'</span></div>'+esc(m.x)+'</div></div>').join('')
           : '<div class="tk-emptyst">还没有讨论</div>';
         s += '<div class="tk-rbtns"><button class="tk-btn" data-tk-adv="'+esc(t.id)+'">推进到 '+this.stName(nx)+'</button>'
           + '<button class="tk-btn" data-tk-disc="'+esc(t.id)+'">讨论</button></div>'
@@ -1200,7 +1334,7 @@ const GameDev = {
     return choices.length?'<select id="gd-filter" class="input" aria-label="筛选记录" data-no-draft>'+optionList(choices,this._filter,'全部')+'</select>':'';
   },
   matches:function(r) {
-    if(this._member&&r.owner!==this._member)return false;
+    if(this._member&&ownerIds(r.owner).indexOf(this._member)<0)return false;
     if(this._tab==='devTask'){
       if(this._area&&(r.area || '')!==this._area)return false;
       if(this._stage&&(r.stage || '')!==this._stage)return false;
@@ -1293,7 +1427,7 @@ const GameDev = {
       });
       return '<section class="gd-column" data-gd-col="'+esc(status)+'"><div class="gd-column-title"><h3><i class="gd-coldot" style="background:'+(COLDOT[status]||'#888')+'"></i>'+LABELS[status]+'</h3><span>'+items.length+'</span></div>'+items.map(function(r){
         const dep=all.find(t=>t.id===r.dependsOn),milestone=milestones.find(m=>m.id===r.milestoneId);
-        const role=ROLE[r.owner] || ROLE[CONFIG.me] || {n:'未指派',c:'#888'};
+        const role=roleOf(ownerFirst(r.owner) || CONFIG.me);
         const mins=r._ut?Math.max(1,Math.round((Date.now()-r._ut)/60000)):null;
         const fresh=(r.updatedBy&&r.updatedBy!==CONFIG.me&&mins&&mins<180)?'<span class="gd-fresh">'+(mins<=1?'刚刚':mins+' 分钟前')+'更新</span>':'';
         const prog=r.prog==null?null:Math.max(0,Math.min(100,Number(r.prog)));
@@ -1508,7 +1642,22 @@ const GameDev = {
       const ow=e.target.closest('[data-gd-owner]');
       if(ow){
         const oid=ow.dataset.gdOwner,cur=D.devAll('devTask').find(function(x){return x.id===oid;});
-        App.openModal({title:'更换负责人',sub:'指派给谁，谁就能在「筛选成员」里看到这张卡。',width:420,html:'<div class="gd-owner-pick">'+Object.entries(ROLE).map(function(p){return '<button type="button" class="btn'+(cur&&cur.owner===p[0]?' btn-primary':'')+'" data-gd-setowner="'+esc(p[0])+'">'+esc(p[1].n)+' · '+esc(p[1].r)+'</button>';}).join(' ')+'</div>',mount:function(mb){mb.onclick=function(ev){const btn=ev.target.closest('[data-gd-setowner]');if(!btn)return;try{D.devSave('devTask',{owner:btn.dataset.gdSetowner},oid);App.closeModal();self.repaint();App.toast('已指派给 '+ROLE[btn.dataset.gdSetowner].n);}catch(err){App.toast(err.message,7000);}};}});
+        const picked=new Set(ownerIds(cur&&cur.owner));
+        App.openModal({title:'负责人（可多选）',sub:'可以选多人 —— 卡片上会并排显示头像，「筛选成员」里每个人都能看到这张卡。',width:440,
+          html:'<div class="gd-owner-pick">'+Object.entries(ROLE).map(function(p){
+              return '<button type="button" class="btn'+(picked.has(p[0])?' btn-primary':'')+'" data-gd-setowner="'+esc(p[0])+'">'
+                + '<i class="tb-who" style="margin-right:5px"><i style="background:'+esc(p[1].c)+'"></i></i>'+esc(p[1].n)+' · '+esc(p[1].r)+'</button>';
+            }).join(' ')+'</div>'
+            +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button type="button" class="btn" data-gd-setowner-cancel>取消</button><button type="button" class="btn btn-primary" data-gd-setowner-save>保存负责人</button></div>',
+          mount:function(mb){mb.onclick=function(ev){
+            const btn=ev.target.closest('[data-gd-setowner]');
+            if(btn){const id=btn.dataset.gdSetowner;if(picked.has(id))picked.delete(id);else picked.add(id);btn.classList.toggle('btn-primary',picked.has(id));return;}
+            if(ev.target.closest('[data-gd-setowner-cancel]')){App.closeModal();return;}
+            if(ev.target.closest('[data-gd-setowner-save]')){
+              try{D.devSave('devTask',{owner:Array.from(picked).join(',')},oid);App.closeModal();self.repaint();App.toast(picked.size?'负责人已更新':'已清空负责人');}
+              catch(err){App.toast(err.message,7000);}
+            }
+          };}});
         return;
       }
       const disc=e.target.closest('[data-gd-disc]'),hist=e.target.closest('[data-gd-history]');if(disc){openDevDiscussion(disc.dataset.gdDisc,disc.dataset.id);return;}if(hist){showHistory(hist.dataset.gdHistory);return;}
@@ -1575,8 +1724,8 @@ const GameDev = {
       const milestones=D.devAll('devMilestone',p.id),tasks=D.devAll('devTask',p.id).filter(t=>t.id!==id);
       const dlist=id?(DISCUSS[id]||[]):[];
       const discBlock='<div class="gd-field gd-full gd-discfield"><span>💬 讨论（'+dlist.length+'）· 讨论留在卡上</span>'
-        +(dlist.length?'<div class="gd-disc-list">'+dlist.map(function(m){return '<p><b>'+esc(roleOf(m.u).n)+'</b> · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p class="gd-disc-x">'+esc(m.x)+'</p>';}).join('')+'</div>':'<p class="gd-note">还没有讨论 · 第一个说什么</p>')
-        +'<div class="gd-disc-row"><input class="input" id="gd-disc-input" placeholder="回复…（'+esc(MENTION_HINT)+'）" maxlength="20000"><button type="button" class="btn btn-primary btn-sm" id="gd-disc-send">发送</button></div></div>';
+        +(dlist.length?'<div class="gd-disc-list">'+dlist.map(function(m){return '<p>'+whoName(m.u)+' · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p class="gd-disc-x">'+esc(m.x)+'</p>';}).join('')+'</div>':'<p class="gd-note">还没有讨论 · 第一个说什么</p>')
+        +'<div class="gd-disc-row"><input class="input" id="gd-disc-input" data-mention placeholder="回复…（'+esc(mentionHint())+'）" maxlength="20000"><button type="button" class="btn btn-primary btn-sm" id="gd-disc-send">发送</button></div></div>';
       // v2.4.0：一比一对齐目标编辑弹窗 —— 左列文本，右列状态/进度/分区/阶段/软件/路径/讨论
       html='<div class="gd-ed-grid">'
         + '<div class="gd-ed-col">'
@@ -1586,8 +1735,9 @@ const GameDev = {
         + area('note','备注',r.note,'随手记：临时约定、参考、提醒')
         + '</div>'
         + '<div class="gd-ed-col">'
-        + '<div class="gd-ed-pair">'+select('status','状态',schema.choices.status,r.status || 'backlog')+select('owner','负责人',Object.entries(ROLE).map(function(kv){return [kv[0],kv[1].n+'（'+kv[1].r+'）'];}),r.owner||CONFIG.me)+'</div>'
-        + '<div class="gd-ed-pair">'+select('priority','优先级',[['critical','P0 阻断'],['high','P1 高'],['mid','P2 中'],['low','P3 低']],r.priority || 'mid')+field('dueDate','交付日',r.dueDate,'date')+'</div>'
+        + '<div class="gd-ed-pair">'+select('status','状态',schema.choices.status,r.status || 'backlog')+select('priority','优先级',[['critical','P0 阻断'],['high','P1 高'],['mid','P2 中'],['low','P3 低']],r.priority || 'mid')+'</div>'
+        + '<div class="gd-ed-pair">'+field('dueDate','交付日',r.dueDate,'date')+'<div></div></div>'
+        + chipGroup('owner','负责人（可多选）',Object.entries(ROLE).map(function(kv){return [kv[0],kv[1].n];}),ownerIds(r.owner||CONFIG.me),true)
         + slider('prog','进度',r.prog==null?0:r.prog)
         + chipGroup('area','分区',[['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']],r.area || 'art',false)
         + chipGroup('stage','流程阶段',STAGE_LIST.map(function(s){return [s,s];}),r.stage || '',false)
@@ -1602,7 +1752,9 @@ const GameDev = {
     if(kind==='devLog')html=field('date','记录日期',r.date || D.today(),'date','required')+area('done','完成 / 进展',r.done,'今天实现了什么？尝试了哪些方案？')+area('blockers','遇到的阻碍',r.blockers,'当前卡在哪里？还需要验证什么？')+area('next','下次继续',r.next,'留下下一次打开项目时的第一步');
     if(kind==='devTime')html=field('date','工作日期',r.date || D.today(),'date','required')+select('category','工作类型',schema.choices.category,r.category || '程序')+field('minutes','耗时（分钟）',r.minutes==null?30:Math.max(.1,Math.round(r.minutes*10)/10),'number','required min="0.1" max="1440" step="0.1"')+area('note','工作说明',r.note)+(r.startedAt?'<p class="gd-note gd-full">编辑后的记录作为手动工时保存，时长精确到 0.1 分钟。</p>':'');
     if(kind==='devAsset')html=field('name','资产名称',r.name,'text','required maxlength="200"')+select('type','资产类型',schema.choices.type,r.type || '模型')+field('dueDate','截止日期',r.dueDate,'date')+field('path','文件 / UE 资源路径',r.path,'text','maxlength="2000"')+area('note','规格 / 备注',r.note,'例如：三角面预算、贴图规格、HDA 输出要求')+'<div class="gd-field gd-full"><span>制作检查清单</span><div id="gd-asset-stages" class="gd-checks"></div><p class="gd-note">检查项目随资产类型调整，保存后也可以在卡片上直接勾选。</p></div>';
-    if(!customTask)html=select('owner','负责人 / 工时成员',Object.entries(ROLE).map(([id,r])=>[id,r.n]),r.owner||CONFIG.me)+html;
+    if(!customTask)html=(kind==='devTime'
+      ? select('owner','工时成员',Object.entries(ROLE).map(([id,r])=>[id,r.n]),ownerFirst(r.owner)||CONFIG.me)
+      : chipGroup('owner','负责人（可多选）',Object.entries(ROLE).map(([id,r])=>[id,r.n]),ownerIds(r.owner||CONFIG.me),true))+html;
     const taskFoot=customTask?'<div class="gd-form-actions gd-full gd-ed-foot"><span class="gd-ed-foot-l"><button type="submit" class="btn btn-primary" id="gd-editor-save">📌 更改保存</button><button type="button" class="btn" id="gd-editor-draft" title="草稿自动存本机">📄 有草稿</button></span>'+(id?'<button type="button" class="btn btn-danger" id="gd-editor-del">🗑 删除</button>':'')+'</div>':'';
     html='<form id="gd-editor" class="gd-form'+(customTask?' gd-form-task':'')+'">'+html+(customTask?taskFoot:'<div class="gd-form-actions gd-full"><button type="button" class="btn" id="gd-editor-cancel">取消</button><button type="submit" class="btn btn-primary" id="gd-editor-save">'+(id?'保存修改':'创建记录')+'</button></div>')+'</form>';
     // v2.4.1：编辑锁 —— 打开即锁 + 4 分钟续期；任何关闭路径（X/保存/删除/Esc）都解锁
@@ -1652,7 +1804,7 @@ const GameDev = {
             let list=wrap.querySelector('.gd-disc-list');
             if(!list){const note=wrap.querySelector('.gd-note');if(note)note.remove();list=document.createElement('div');list.className='gd-disc-list';wrap.insertBefore(list,wrap.querySelector('.gd-disc-row'));}
             const last=DISCUSS[id][DISCUSS[id].length-1];
-            list.insertAdjacentHTML('beforeend','<p><b>'+esc(roleOf(last.u).n)+'</b> · '+esc(dstr(last.t))+' '+fmtT(last.t)+'</p><p class="gd-disc-x">'+esc(last.x)+'</p>');
+            list.insertAdjacentHTML('beforeend','<p>'+whoName(last.u)+' · '+esc(dstr(last.t))+' '+fmtT(last.t)+'</p><p class="gd-disc-x">'+esc(last.x)+'</p>');
             updateBell();App.toast(at.length?'📨 已提醒 '+at.join('、'):'已发送到本机，等待同步');
           }catch(e){applyState(before);App.toast(e.message,'warn');}
         };
@@ -1697,6 +1849,9 @@ const GameDev = {
 
   function render(){
     if(!root)return;
+    closeMention();
+    migrateMemberNames();
+    applyCloudMemberNames();
     if(MODE==='legacy'){if(GameDev._clock)clearInterval(GameDev._clock);renderLegacy();return;}
     root.querySelector('.t-root').dataset.th=curTheme();
     const surf=root.querySelector('.surface'),active=root.activeElement,search=active?.id==='gd-search',pos=active?.selectionStart;
@@ -2587,6 +2742,26 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   @media(max-width:640px){.tk-lane-bd{grid-template-columns:1fr}.tk-proj-hd .sum{display:none}}
   @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}.card:hover,.gd-card:hover,.gd-task:hover{transform:none}}
 
+  /* ===== v3-19 · @ 成员选择器 / 多人负责人 / 讨论名字上色 ===== */
+  .tb-ment{position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--card-border);border-radius:11px;
+    box-shadow:0 14px 38px rgba(0,0,0,.42);padding:5px;min-width:172px;max-width:280px}
+  .tb-ment-hd{font-size:9.5px;color:var(--muted);padding:4px 8px 6px;letter-spacing:.02em;white-space:nowrap;overflow:hidden}
+  .tb-ment-i{display:flex;align-items:center;gap:7px;width:100%;border:none;background:none;color:var(--text);font:inherit;
+    font-size:12px;padding:6px 8px;border-radius:7px;cursor:pointer;text-align:left;font-family:inherit;line-height:1.4}
+  .tb-ment-i:hover,.tb-ment-i.on{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+  .tb-ment-i i{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .tb-ment-i b{font-weight:650;white-space:nowrap}
+  .tb-ment-i em{margin-left:auto;font-style:normal;font-size:10px;color:var(--muted);opacity:.9;white-space:nowrap;overflow:hidden}
+  /* 多人负责人：头像叠放；超过 2 人折成 +N */
+  .tk-av+.tk-av{margin-left:-5px;box-shadow:0 0 0 1.5px var(--card-bg-2)}
+  .tk-av-more{background:var(--card-border)!important;color:var(--muted)!important;font-size:8.5px!important;font-weight:700}
+  /* 讨论里的人：色点 + 人色名字，谁说的颜色一眼分清 */
+  .tb-who{display:inline-flex;align-items:center;gap:4px;font-weight:700;white-space:nowrap}
+  .tb-who i{width:6px;height:6px;border-radius:50%;flex:0 0 auto;display:inline-block}
+  .gd-disc-list p>b{font-weight:700}
+  .tb-disc-n{font-size:10.5px;color:var(--muted);margin-bottom:2px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+  .tb-owner-multi{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+
   /* ===== v3-18 · 统一看板层（tb-*）：里程碑 / BUG / 日志 / 工时 / 资产 =====
      目标：这 5 个面板和「任务看板」长同一张脸 —— 同 KPI 条、同泳道列、
      同紧凑卡（P 级 pill + 标题 + 信息行 + hover 图标动作）、同剩余天数说法。
@@ -3021,12 +3196,12 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
       <div class="flabel" style="margin-top:4px">💬 讨论（${dcount}）· 讨论留在卡上，三个月后还能查到</div>
       <div class="disc" id="discList">
         ${(DISCUSS[a.id] || []).map(d => `<div class="disc-i">${av(d.u, 22)}
-          <div class="disc-b"><div class="disc-h"><b>${roleOf(d.u).n}</b><span class="tm">${fmtT(d.t)}</span></div>
-          <div class="disc-t">${esc(d.x).replace(MENTION_RE, '<span class="at">@$1</span>')}</div></div></div>`).join('')
+          <div class="disc-b"><div class="disc-h">${whoName(d.u)}<span class="tm">${fmtT(d.t)}</span></div>
+          <div class="disc-t">${esc(d.x).replace(mentionRe(), '<span class="at">@$1</span>')}</div></div></div>`).join('')
         || '<div class="tiny mut">还没有讨论 · 第一个说点什么</div>'}
       </div>
       <div class="row" style="gap:6px;margin-top:8px">
-        <input type="text" id="discInput" placeholder="回复…（${esc(MENTION_HINT)}）" style="flex:1">
+        <input type="text" id="discInput" data-mention placeholder="回复…（${esc(mentionHint())}）" style="flex:1">
         <button class="btn pri" id="discSend">发送</button>
       </div>`;
     root.querySelector('#dFoot').innerHTML = `
@@ -3101,7 +3276,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     log('discuss', id, `讨论：${v.slice(0, 20)}`);
     const at = notifyMentions(v, id);
     if (at.length) toast(`📨 已提醒 ${at.join('、')}`);
-    else if (/@[^\s]/.test(v)) toast(`⚠️ @ 的名字没匹配到成员（可用：${MENTION_HINT}）`, 'warn');
+    else if (/@[^\s]/.test(v)) toast(`⚠️ @ 的名字没匹配到成员（可用：${mentionHint()}）`, 'warn');
     save(); render(); updateBell(); openDrawer(id, true);
   }
   function saveDraft(a) {
@@ -3466,7 +3641,18 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
     get trash() { return TRASH.slice(); },
     get log() { return LOG.slice(); },
     pull, push: () => doSyncChannel('github'),
-    setMembers(roles) { Object.assign(ROLE, roles); render(); return api; },
+    setMembers(roles, opt) {
+      Object.assign(ROLE, roles || {});
+      /* v3-19：成员名字是团队共享信息 —— 以前只存本机，换台机器又叫回默认名。
+         现在显式改名（非 silent）会把名字写进团队数据，两台机器看同一份。 */
+      if(!(opt && opt.silent)){
+        const names = {};
+        Object.keys(ROLE).forEach(function(k){ names[k] = String(ROLE[k].n || ''); });
+        EXTRA.members = Object.assign({}, EXTRA.members || {}, names);
+        try { save(); } catch (e) {}
+      }
+      render(); return api;
+    },
     /* 21/42 外部注入「远端改动」（对方工作站推送后，本地探测到）
        改不同字段 → 自动静默合并；同字段 → 弹冲突窗 */
     applyRemoteChange(cardId, field, val, by) {
