@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.7.1-20261016'; // v3-17 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.8.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -124,7 +124,7 @@
     if (f === 'due') return dstr(v);
     return String(v);
   };
-  const roleOf = id => ROLE[id] || { n: String(id), c: '#888', r: '' };
+  const roleOf = id => ROLE[id] || { n: id ? String(id) : '未指派', c: '#888', r: '' };
 
   /* v2.2: shared development records. Preferences/drafts are local only. */
   const DEV_KEYS = {devProject:'devProjects',devMilestone:'devMilestones',devTask:'devTasks',devBug:'devBugs',devLog:'devLogs',devTime:'devTimes',devAsset:'devAssets'};
@@ -410,6 +410,8 @@
 const D = DevData;
 const I={get:k=>'<span aria-hidden="true">'+({gamepad:'🎮',plus:'＋',target:'◎',grid:'▦',shield:'◇',edit:'✎',clock:'◷',inbox:'▣',search:'⌕',todo:'☷'}[k]||'')+'</span>'};
 const App=DevModal;
+const SOFTS = ['Houdini','UE','Blender','AI 制作'];
+const SOFT_ABBR = {Houdini:'H',UE:'U',Blender:'B','AI 制作':'AI'};
 const TABS = [
   ['devMilestone','里程碑','target'],['devTask','任务看板','grid'],['devBug','BUG 追踪','shield'],
   ['devLog','开发日志','edit'],['devTime','工时统计','clock'],['devAsset','资产流程','inbox']
@@ -420,6 +422,7 @@ const LABELS = {
   high:'高',mid:'中',low:'低',critical:'阻断',medium:'一般'
 };
 const STAGES = {design:'设计确认',build:'制作完成',uv:'UV 完成',material:'材质完成',collision:'碰撞完成',lod:'LOD 完成',engine:'UE 入库'};
+const STAGE_ABBR = {design:'设',build:'制',uv:'UV',material:'材',collision:'碰',lod:'LOD',engine:'UE'};
 const WORKFLOWS = {
   '模型':['design','build','uv','material','collision','lod','engine'],
   '场景':['design','build','material','collision','engine'],
@@ -480,12 +483,86 @@ function details(label,text) {
 }
 function assetProgress(r) {
   const stages=WORKFLOWS[r.type] || WORKFLOWS['其他'];
-  const count=stages.filter(function(k){return !!r.checks[k];}).length;
+  const ck=r.checks||{};
+  const count=stages.filter(function(k){return !!ck[k];}).length;
   return {stages:stages,count:count,total:stages.length,percent:Math.round(count/stages.length*100)};
 }
 function actions(kind,id,extra) {
   return '<div class="gd-actions">'+(extra || '')+'<button class="btn btn-sm" data-gd-disc="'+kind+'" data-id="'+esc(id)+'">讨论</button><button class="btn btn-sm" data-gd-history="'+esc(id)+'">历史</button><span class="gd-meta">'+esc(roleOf(D.devAll(kind).find(r=>r.id===id)?.owner).n)+' · 记录人 '+esc(roleOf(D.devAll(kind).find(r=>r.id===id)?.recorder).n)+'</span><button class="btn btn-sm" data-gd-edit="'+kind+'" data-id="'+esc(id)+'">编辑</button><button class="btn btn-ghost btn-sm" data-gd-delete="'+kind+'" data-id="'+esc(id)+'">删除</button></div>';
 }
+
+  /* ============================================================
+     UB（v3-18）—— 统一看板层
+     ------------------------------------------------------------
+     里程碑 / BUG 追踪 / 开发日志 / 工时统计 / 资产流程 这 5 个面板，
+     统一成「任务看板」的同一套语言：
+       · 同一个 KPI 条（.tk-kpibar，按面板换指标）
+       · 同一个泳道 + 状态列（.tk-lane / .tk-cell，可四列可三列）
+       · 同一张紧凑卡（.tk-card 的 r1..r4：P 级 pill + 标题 + 分区/软件 + 头像 + 剩余天数）
+       · 同一组右上角图标动作（💬 🕘 ✏️ 🗑，hover 显形；手机上常显）
+     只做渲染，不碰存储与写入（写入仍全走 D.devSave / D.devRemove）。
+     ============================================================ */
+  const UB = {
+    /* 卡片右上角动作组 —— 与任务卡完全同款 */
+    ico: function (kind, id, nDisc, noDel) {
+      return '<span class="tk-ico">'
+        + '<button type="button" class="tk-ib" data-gd-disc="' + kind + '" data-id="' + esc(id) + '" title="团队讨论">💬' + (nDisc ? '<b>' + nDisc + '</b>' : '') + '</button>'
+        + '<button type="button" class="tk-ib" data-gd-history="' + esc(id) + '" title="历史操作记录">🕘</button>'
+        + '<button type="button" class="tk-ib" data-gd-edit="' + kind + '" data-id="' + esc(id) + '" title="编辑">✏️</button>'
+        + (noDel ? '' : '<button type="button" class="tk-ib" data-gd-delete="' + kind + '" data-id="' + esc(id) + '" title="删除">🗑</button>')
+        + '</span>';
+    },
+    /* 头像 + 名字（只读；改负责人目前只对任务卡开口，别在这挂 data-gd-owner） */
+    who: function (id) {
+      if (!id) return '<span class="tk-own tk-own-ro"><span class="tk-k">未指派</span></span>';
+      const r = roleOf(id);
+      return '<span class="tk-own tk-own-ro">' + TBoard.av(id) + '<b>' + esc(r.n) + '</b></span>';
+    },
+    /* 卡头：pill（P 级色）+ 标题 + 动作组 */
+    head: function (pillCls, pillTxt, title, kind, id, nDisc, noDel) {
+      return '<div class="tk-r1"><span class="tk-pri ' + pillCls + '">' + esc(pillTxt) + '</span>'
+        + '<span class="tt">' + esc(title) + '</span>' + this.ico(kind, id, nDisc, noDel) + '</div>';
+    },
+    /* 剩余天数 —— 与任务卡同一套说法（逾期 N 天 / 今天到期 / 剩 N 天 / 未排期） */
+    left: function (date, done) {
+      if (!date) return '<span class="tk-nodue">未排期</span>';
+      if (done) return '<span class="tk-due done">已完成</span>';
+      const dd = TBoard.daysTo(date);
+      if (dd < 0) return '<span class="tk-due over">逾期 ' + (-dd) + ' 天</span>';
+      if (dd === 0) return '<span class="tk-due over">今天到期</span>';
+      return '<span class="tk-due' + (dd <= 2 ? ' soon' : ' ok') + '">剩 ' + dd + ' 天</span>';
+    },
+    /* 泳道外壳：cols=[[key,label]...]；cell(key) 出该列卡片；count(key) 出数量 */
+    lane: function (opt) {
+      const body = opt.cols.map(function (c) {
+        const n = opt.count(c[0]);
+        return '<div class="tk-cell" data-tb-cell="' + esc(c[0]) + '">'
+          + '<div class="ct">' + esc(c[1]) + ' ' + n + '</div>'
+          + (n ? opt.cell(c[0]) : '<div class="tk-dim" style="font-size:11px;padding:3px 2px">—</div>')
+          + '</div>';
+      }).join('');
+      return '<div class="tk-lane"><div class="tk-lane-hd" style="border-left-color:' + (opt.color || 'var(--accent)') + ';cursor:default">'
+        + '<span>' + opt.icon + ' ' + esc(opt.title) + '</span>'
+        + '<span class="cnt">' + esc(opt.sub || '') + '</span>'
+        + (opt.hint ? '<span class="hint">' + esc(opt.hint) + '</span>' : '')
+        + '<span class="tri" style="margin-left:' + (opt.hint ? '8px' : 'auto') + '">' + esc(opt.tail || '') + '</span>'
+        + '</div><div class="tk-lane-bd ' + (opt.cls || '') + '">' + body + '</div></div>';
+    },
+    /* KPI 条内容（包在 .tk-kpibar 里用，视觉与任务看板一模一样） */
+    kpi: function (items, opt) {
+      opt = opt || {};
+      let s = items.map(function (x, i) {
+        return '<span class="it' + (x[2] ? ' ' + x[2] : '') + '"><b>' + x[0] + '</b>' + x[1] + '</span>'
+          + (i === 0 ? '<i class="sep"></i>' : '');
+      }).join('');
+      if (opt.pct != null) {
+        s += (items.length > 1 ? '<i class="sep"></i>' : '')
+          + '<span class="pw">' + TBoard.bar(opt.pct) + '<span class="pct">' + opt.pct + '% ' + esc(opt.pctLabel || '') + '</span></span>';
+      }
+      if (opt.right) s += '<i class="sep"></i><span class="lds">' + opt.right + '</span>';
+      return s;
+    }
+  };
 
   /* ============================================================
      TBoard（v2.5）—— 任务看板重设计层
@@ -543,6 +620,72 @@ function actions(kind,id,extra) {
         s += '<span class="ld'+(o2?' over':'')+'">'+this.av(id)+esc(ROLE[id].n)+' '+mine.length+(o2?' ⚠️'+o2:'')+'</span>';
       });
       return s + '</span>';
+    },
+    /* ---- v3-18：KPI 条按面板换指标 ----
+       原来不管切到哪个面板，顶上都只报「任务 / 在做 / 待验收」—— 站在 BUG 页看任务数没有意义。
+       这里按 tab 分派，但仍然是同一个 .tk-kpibar 外壳，观感与任务看板一致。 */
+    kpiFor(tab, o) {
+      o = o || {};
+      const tasks = o.tasks || [], bugs = o.bugs || [], assets = o.assets || [], list = o.list || [], pid = o.projectId || '';
+      if (tab === 'devMilestone') {
+        const done = list.filter(r => r.status === 'done').length;
+        const live = list.filter(r => r.status !== 'done');
+        const over = live.filter(r => r.dueDate && this.daysTo(r.dueDate) < 0).length;
+        const linked = tasks.filter(t => t.milestoneId), linkedDone = linked.filter(t => t.status === 'done').length;
+        return UB.kpi([
+          [list.length, '里程碑'],
+          [live.filter(r => r.status === 'active').length, '进行中'],
+          [over, '逾期', over ? 'hot' : ''],
+          [linkedDone + ' / ' + linked.length, '关联任务']
+        ], { pct: list.length ? Math.round(done / list.length * 100) : 0, pctLabel: '完成（' + done + '/' + list.length + '）' });
+      }
+      if (tab === 'devBug') {
+        const live = list.filter(r => r.status !== 'closed');
+        const block = live.filter(r => r.severity === 'critical').length;
+        return UB.kpi([
+          [list.length, 'BUG'],
+          [list.filter(r => r.status === 'open').length, '待处理'],
+          [list.filter(r => r.status === 'fixing').length, '修复中'],
+          [list.filter(r => r.status === 'verify').length, '待验证'],
+          [block, '阻断未关', block ? 'hot' : '']
+        ], { pct: list.length ? Math.round((list.length - live.length) / list.length * 100) : 0, pctLabel: '已关闭' });
+      }
+      if (tab === 'devLog') {
+        const week = list.filter(r => r.date >= D.shift(D.today(), -6));
+        const days = {}; week.forEach(r => { days[r.date] = 1; });
+        const last = list.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+        return UB.kpi([
+          [list.length, '日志'],
+          [week.length, '近 7 天'],
+          [Object.keys(days).length, '有记录天数'],
+          [last ? String(last.date).slice(5) : '—', '最近一篇']
+        ], { pct: Math.round(Object.keys(days).length / 7 * 100), pctLabel: '七天覆盖' });
+      }
+      if (tab === 'devTime') {
+        const times = o.times || [];
+        const saved = times.filter(r => r.minutes != null);
+        const total = saved.reduce((n, r) => n + r.minutes, 0);
+        const tMin = D.devTimeSummary(pid, D.today(), D.today()).minutes;
+        const wMin = D.devTimeSummary(pid, D.shift(D.today(), -6), D.today()).minutes;
+        return UB.kpi([
+          [hours(tMin), '今天'],
+          [hours(wMin), '近 7 天'],
+          [hours(total), '本项目累计'],
+          [saved.length, '已保存段']
+        ]);
+      }
+      if (tab === 'devAsset') {
+        const ready = list.filter(r => assetProgress(r).percent === 100);
+        const ing = list.filter(r => { const p = assetProgress(r); return p.percent > 0 && p.percent < 100; });
+        return UB.kpi([
+          [list.length, '资产'],
+          [ready.length, '已就绪'],
+          [ing.length, '制作中'],
+          [list.length - ready.length - ing.length, '未开始']
+        ], { pct: list.length ? Math.round(ready.length / list.length * 100) : 0, pctLabel: '就绪率' });
+      }
+      /* 任务看板：沿用原来的任务 KPI（5 个数 + 总进度 + 成员负载） */
+      return this.kpi(tasks, bugs);
     },
     /* ---- 项目详情条（可展开；原来 resourcePanel 的内容整块搬进来） ---- */
     proj(g, p, tasks){
@@ -1012,7 +1155,7 @@ const GameDev = {
       + '</div>';
     const picker='';
     const kpiItems=[['任务总数',tasks.length],['进行中',tasks.filter(r=>r.status==='doing').length],['待验收',tasks.filter(r=>r.status==='review').length],['待开发',tasks.filter(r=>r.status==='backlog').length],['未关闭 BUG',bugs.filter(r=>r.status!=='closed').length],['近 7 天工时',hours(summary.minutes)],['资产就绪',assets.filter(r=>assetProgress(r).percent===100).length+' / '+assets.length]];
-    const kpibar='<div class="tk-kpibar">'+TBoard.kpi(tasks,bugs)+'</div>';
+    const kpibar='<div class="tk-kpibar">'+TBoard.kpiFor(tab,{tasks:tasks,bugs:bugs,assets:assets,list:all(tab),times:all('devTime'),projectId:id})+'</div>';
     const tkProj=TBoard.proj(this,p,tasks);
     const info=p?'<section class="gd-project-card">'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+this.resourcePanel(p)+noticeBar(p)+'</section>':'';
     const tabs='<div class="gd-tabs" role="tablist" aria-label="开发功能">'+TABS.map(function(t){return '<button role="tab" tabindex="'+(tab===t[0]?'0':'-1')+'" aria-selected="'+(tab===t[0])+'" class="gd-tab'+(tab===t[0]?' on':'')+'" data-gd-tab="'+t[0]+'">'+I.get(t[2])+'<span>'+t[1]+'</span><small>'+all(t[0]).length+'</small></button>';}).join('')+'</div>';
@@ -1042,7 +1185,7 @@ const GameDev = {
       }).join('<span class="gd-railarr">›</span>');
       return '<span class="gd-railgrp"><b>'+esc(g[1])+'</b>'+items+'</span>';
     }).join('');
-    const softs=['Houdini','UE','Blender'].map(function(s){return '<button type="button" class="gd-softbtn'+(soft===s?' on':'')+'" data-gd-soft="'+s+'">'+s+'</button>';}).join('');
+    const softs=SOFTS.map(function(s){return '<button type="button" class="gd-softbtn'+(soft===s?' on':'')+'" data-gd-soft="'+s+'">'+s+'</button>';}).join('');
     const dirty=!!(area||stage||soft);
     return '<div class="gd-filterbar"><span class="gd-areaseg">'+head+'</span>'
       +'<span class="gd-softseg"><em>软件</em>'+softs+'</span>'
@@ -1073,10 +1216,32 @@ const GameDev = {
   empty:function(text) {return '<div class="gd-empty"><h3>'+esc(text || '这里还没有记录')+'</h3><p>'+(this._query||this._filter?'可以调整搜索或筛选条件。':'点击右上方按钮，开始记录这个项目。')+'</p></div>';},
   milestones:function(rows,tasks) {
     if(!rows.length)return this.empty('把目标拆成可交付的里程碑');
-    return '<div class="gd-card-grid">'+rows.slice().sort((a,b)=>(a.dueDate || '9999').localeCompare(b.dueDate || '9999')).map(function(r){
-      const linked=tasks.filter(t=>t.milestoneId===r.id),done=linked.filter(t=>t.status==='done').length,pct=linked.length?Math.round(done/linked.length*100):r.status==='done'?100:0;
-      return '<article class="gd-card"><div class="gd-card-head">'+badge(r.status)+dateHint(r.dueDate,r.status==='done')+'</div><h3>'+esc(r.title)+'</h3>'+details('目标',r.description)+details('交付 / 验收标准',r.acceptance)+'<div class="gd-progress"><i style="width:'+pct+'%"></i></div><div class="gd-meta">关联任务 '+done+' / '+linked.length+' · '+pct+'%</div>'+actions('devMilestone',r.id)+'</article>';
-    }).join('')+'</div>';
+    const COLS=[['planned','未开始'],['active','进行中'],['done','已完成']];
+    const PILL={planned:'P3',active:'P2',done:'P1'};
+    const list=rows.slice().sort((a,b)=>String(a.dueDate||'9999').localeCompare(String(b.dueDate||'9999')));
+    const card=function(r){
+      const linked=tasks.filter(t=>t.milestoneId===r.id);
+      const done=linked.filter(t=>t.status==='done').length;
+      const pct=linked.length?Math.round(done/linked.length*100):(r.status==='done'?100:0);
+      const nD=(DISCUSS[r.id]||[]).length;
+      const acc=String(r.acceptance||'');
+      return '<div class="tk-card" data-gd-open="devMilestone" data-id="'+esc(r.id)+'">'
+        + UB.head(r.status==='done'?'tb-ok':(PILL[r.status]||'P3'),LABELS[r.status]||r.status,r.title,'devMilestone',r.id,nD)
+        + (r.description?'<div class="tb-desc">'+esc(r.description)+'</div>':'')
+        + '<div class="tb-pg">'+TBoard.bar(pct,r.status==='done'?'#10b981':'var(--accent)')+'<span class="tb-pct">'+pct+'%</span></div>'
+        + '<div class="tk-r3"><span class="tb-k">关联任务 '+done+'/'+linked.length+'</span><span class="tk-sp"></span>'+UB.left(r.dueDate,r.status==='done')+'<span class="tk-mut2">'+esc(String(r.dueDate||'').slice(5))+'</span></div>'
+        + (acc?'<div class="tk-r4"><span class="tk-tag" title="'+esc(acc)+'">验收 · '+esc(acc.slice(0,16))+(acc.length>16?'…':'')+'</span></div>':'')
+        + '</div>';
+    };
+    const over=list.filter(r=>r.status!=='done'&&r.dueDate&&TBoard.daysTo(r.dueDate)<0).length;
+    return UB.lane({icon:'🚩',title:'项目里程碑',color:'#8b5cf6',cls:'tb-c3',
+        sub:list.length+' 个 · 完成 '+list.filter(r=>r.status==='done').length+(over?' · '+over+' 逾期':''),
+        hint:over?'⚠️ 有 '+over+' 个已过截止日':'',
+        tail:'按截止日期排',
+        cols:COLS,
+        count:function(k){return list.filter(r=>r.status===k).length;},
+        cell:function(k){return list.filter(r=>r.status===k).map(card).join('');}})
+      + '<div style="font-size:11px;color:var(--muted);line-height:1.75;margin-top:8px">卡片进度 = 关联任务里已完成的比例。点卡片或 ✏️ 改目标与验收标准；里程碑也会挂在任务卡的 r4 上。</div>';
   },
   resourcePanel:function(p) {
     const lines=String(p.resources || '').split('\n').map(function(s){return s.trim();}).filter(Boolean);
@@ -1133,7 +1298,7 @@ const GameDev = {
         const fresh=(r.updatedBy&&r.updatedBy!==CONFIG.me&&mins&&mins<180)?'<span class="gd-fresh">'+(mins<=1?'刚刚':mins+' 分钟前')+'更新</span>':'';
         const prog=r.prog==null?null:Math.max(0,Math.min(100,Number(r.prog)));
         const softs=String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean);
-        const meta='<div class="gd-task-meta">'+(r.stage?'<span class="gd-chip">'+esc(r.stage)+'</span>':'')+softs.map(function(s){return '<span class="gd-soft"><u>'+esc(({Houdini:'H',UE:'U',Blender:'B'})[s] || s.charAt(0))+'</u>'+esc(s)+'</span>';}).join('')+'</div>';
+        const meta='<div class="gd-task-meta">'+(r.stage?'<span class="gd-chip">'+esc(r.stage)+'</span>':'')+softs.map(function(s){return '<span class="gd-soft"><u>'+esc(SOFT_ABBR[s] || s.charAt(0))+'</u>'+esc(s)+'</span>';}).join('')+'</div>';
         const progRow=prog==null?'':'<div class="gd-progrow"><div class="gd-progbar"><i style="width:'+prog+'%"></i></div><span class="gd-progpct">'+prog+'%</span></div>';
         const pathRow=r.path?'<div class="gd-pathrow"><span class="gd-pathlab">UE</span><code class="gd-path" title="'+esc(r.path)+'">'+esc(r.path)+'</code></div>':'';
         const extra=(milestone?'<div class="gd-task-extra">里程碑 · '+esc(milestone.title)+'</div>':'')+(dep?'<div class="gd-task-extra gd-dependency'+(dep.status!=='done'?' is-blocked':'')+'">前置 · '+esc(dep.title)+(dep.status==='done'?'（完成）':'（未完成）')+'</div>':'');
@@ -1166,34 +1331,121 @@ const GameDev = {
   },
   bugs:function(rows) {
     if(!rows.length)return this.empty('让问题都有复现步骤和处理结果');
+    const ST=[['open','待处理'],['fixing','修复中'],['verify','待验证'],['closed','已关闭']];
+    const SEV={critical:['P0','阻断'],high:['P1','高'],medium:['P2','一般'],low:['P3','低']};
     const statuses=D.DEV_SCHEMA.devBugs.choices.status;
-    return '<div class="gd-card-grid">'+rows.slice().sort((a,b)=>['critical','high','medium','low'].indexOf(a.severity)-['critical','high','medium','low'].indexOf(b.severity)).map(function(r){
+    const list=rows.slice().sort((a,b)=>['critical','high','medium','low'].indexOf(a.severity)-['critical','high','medium','low'].indexOf(b.severity));
+    const card=function(r){
+      const sev=SEV[r.severity]||SEV.medium;
+      const nD=(DISCUSS[r.id]||[]).length;
       const next=statuses[statuses.indexOf(r.status)+1];
-      return '<article class="gd-card"><div class="gd-meta">'+badge(r.status)+badge(r.severity)+'</div><h3>'+esc(r.title)+'</h3>'+details('环境 / 版本',r.environment)+'<details class="gd-expand"><summary>复现与处理详情</summary>'+details('复现步骤',r.steps)+details('预期结果',r.expected)+details('实际结果',r.actual)+details('修复与验证',r.solution)+'</details>'+(r.images&&r.images.length?'<div class="gd-screenshots">'+r.images.map(function(src,i){return '<button data-gd-image="'+esc(r.id)+'" data-index="'+i+'" aria-label="查看 BUG 截图 '+(i+1)+'">'+thumb(src,'BUG 截图 '+(i+1))+'</button>';}).join('')+'</div>':'')+actions('devBug',r.id,next?'<button class="btn btn-sm" data-gd-advance="devBug" data-id="'+esc(r.id)+'">移至'+LABELS[next]+'</button>':'')+'</article>';
-    }).join('')+'</div>';
+      const nImg=(r.images||[]).length;
+      const env=String(r.environment||'');
+      return '<div class="tk-card" data-gd-open="devBug" data-id="'+esc(r.id)+'">'
+        + UB.head(sev[0],sev[1],r.title,'devBug',r.id,nD)
+        + '<div class="tk-r2">'
+        +   (env?'<span class="tk-sw" title="'+esc(env)+'">'+esc(env.slice(0,14))+(env.length>14?'…':'')+'</span>':'<span class="tk-dim2">未填环境</span>')
+        +   (nImg?'<span class="tk-tag">📷 '+nImg+'</span>':'')
+        +   (r.solution?'<span class="tk-tag">已有处理记录</span>':'')
+        + '</div>'
+        + '<div class="tk-r3">'+UB.who(r.owner||r.recorder)+'<span class="tk-sp"></span>'
+        +   (next?'<button type="button" class="tb-adv" data-gd-advance="devBug" data-id="'+esc(r.id)+'" title="移到「'+esc(LABELS[next])+'」">→ '+esc(LABELS[next])+'</button>':'')
+        + '</div></div>';
+    };
+    const live=list.filter(r=>r.status!=='closed'), block=live.filter(r=>r.severity==='critical').length;
+    return UB.lane({icon:'◇',title:'BUG 追踪',color:'#ef4444',cls:'tb-c4',
+        sub:live.length+' 条未关闭'+(block?' · '+block+' 条阻断':'')+' · 共 '+list.length+' 条',
+        hint:block?'⚠️ 有 '+block+' 条阻断级没关':'',
+        tail:'按严重程度排',
+        cols:ST,
+        count:function(k){return list.filter(r=>r.status===k).length;},
+        cell:function(k){return list.filter(r=>r.status===k).map(card).join('');}})
+      + '<div style="font-size:11px;color:var(--muted);line-height:1.75;margin-top:8px">P0=阻断（红）· P1=高 · P2=一般 · P3=低。卡上「→ 状态」一步推到下一格；点卡片看复现步骤与截图。</div>';
   },
   logs:function(rows) {
     if(!rows.length)return this.empty('给明天的自己留下一个明确的起点');
-    return '<div class="gd-log-list">'+rows.slice().sort((a,b)=>b.date.localeCompare(a.date)||b._ut-a._ut).map(function(r){return '<article class="gd-card gd-log"><div class="gd-log-date"><strong>'+esc(r.date)+'</strong><span>星期'+esc(D.weekCn(r.date))+'</span></div><div class="gd-log-body">'+details('完成 / 进展',r.done)+details('遇到的阻碍',r.blockers)+details('下次继续',r.next)+actions('devLog',r.id)+'</div></article>';}).join('')+'</div>';
+    const list=rows.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))||(b._ut||0)-(a._ut||0));
+    return '<div class="tb-loglist">'+list.map(function(r){
+      const nD=(DISCUSS[r.id]||[]).length;
+      return '<div class="tb-logrow">'
+        + '<div class="tb-logdate"><b>'+esc(String(r.date).slice(5))+'</b><span>星期'+esc(D.weekCn(r.date))+'</span></div>'
+        + '<div class="tk-card tb-logcard" data-gd-open="devLog" data-id="'+esc(r.id)+'">'
+        + '<div class="tb-loghd">'+UB.ico('devLog',r.id,nD)+'</div>'
+        + (r.done?'<div class="tb-line main"><i>完成</i><span>'+esc(r.done)+'</span></div>':'')
+        + (r.blockers?'<div class="tb-line warn"><i>阻碍</i><span>'+esc(r.blockers)+'</span></div>':'')
+        + (r.next?'<div class="tb-line ok"><i>下次</i><span>'+esc(r.next)+'</span></div>':'')
+        + '</div></div>';
+    }).join('')+'</div>'
+      + '<div style="font-size:11px;color:var(--muted);line-height:1.75;margin-top:8px">按日期倒序，一篇卡三段：完成 / 阻碍 / 下次。<b>「下次」是写给自己的下一步</b>，别留空。</div>';
   },
   times:function(rows,projectId) {
     const active=D.devAll('devTime').filter(r=>r.startedAt&&!r.endedAt&&(!this._member||r.owner===this._member));
-    const projects=D.devAll('devProject'),today=D.devTimeSummary(projectId,D.today(),D.today(),this._member),week=D.devTimeSummary(projectId,D.shift(D.today(),-6),D.today(),this._member);
-    const saved=rows.filter(r=>!r.startedAt||r.endedAt),total=saved.reduce((n,r)=>n+r.minutes,0),categories={};
-    saved.forEach(r=>categories[r.category]=(categories[r.category] || 0)+r.minutes);
-    const timer='<div class="gd-timer"><button class="btn" data-gd-start>开始我的计时</button>'+(active.length?active.map(function(r){const p=projects.find(p=>p.id===r.projectId);return '<div class="gd-timer-active"><div><span class="gd-eyebrow">正在计时 · '+esc(roleOf(r.owner).n)+' · '+esc(p?p.name:'未找到项目')+' · '+esc(r.category)+'</span><strong data-gd-clock="'+r.startedAt+'">'+clock(Date.now()-r.startedAt)+'</strong><p>'+esc(r.note || '专注于当前工作')+'</p></div><div class="gd-timer-buttons"><button class="btn btn-primary" data-gd-stop="'+esc(r.id)+'">停止并保存工时</button><button class="btn btn-sm" data-gd-delete="devTime" data-id="'+esc(r.id)+'">舍弃本次</button></div></div>';}).join(''):'<div><h3>开始一段专注开发</h3><p>选好工作类型，结束时记录实际耗时。</p><button class="btn btn-primary" data-gd-start>开始计时</button></div>')+'<small>计时跨页面、刷新后仍保留；关闭页面期间也会继续累计，离开工作前请停止。统计包含已保存工时，跨日计时按天拆分。</small></div>';
-    const stats='<div class="gd-time-stats"><div><span>今天</span><strong>'+hours(today.minutes)+'</strong></div><div><span>近 7 天</span><strong>'+hours(week.minutes)+'</strong></div><div><span>当前筛选合计</span><strong>'+hours(total)+'</strong></div></div>';
-    const bars=Object.keys(categories).length?'<div class="gd-time-bars">'+Object.keys(categories).map(function(k){return '<div><span>'+esc(k)+'</span><div class="gd-progress"><i style="width:'+(total?categories[k]/total*100:0)+'%"></i></div><strong>'+hours(categories[k])+'</strong></div>';}).join('')+'</div>':'';
-    const list=saved.length?'<div class="gd-time-list">'+saved.slice().sort((a,b)=>b.date.localeCompare(a.date)||b._ut-a._ut).map(r=>'<article class="gd-time-row"><div><strong>'+esc(r.date)+'</strong><span>'+esc(r.category)+'</span></div><p>'+esc(r.note || '未填写说明')+'</p><strong>'+hours(r.minutes)+'</strong>'+actions('devTime',r.id)+'</article>').join('')+'</div>':this.empty('还没有符合条件的已保存工时');
-    const members='<div class="gd-time-bars"><h3>成员工时 · 当前项目与日期筛选</h3>'+Object.entries(ROLE).map(([id,m])=>'<div><span>'+esc(m.n)+'</span><strong>'+hours(saved.filter(r=>r.owner===id).reduce((n,r)=>n+r.minutes,0))+'</strong></div>').join('')+'</div>';
-    return timer+stats+members+bars+list;
+    const projects=D.devAll('devProject');
+    const list=rows.filter(r=>!r.startedAt||r.endedAt);
+    const total=list.reduce((n,r)=>n+(r.minutes||0),0);
+    const byCat={},byMan={};
+    list.forEach(function(r){byCat[r.category]=(byCat[r.category]||0)+(r.minutes||0);const k=r.owner||CONFIG.me;byMan[k]=(byMan[k]||0)+(r.minutes||0);});
+    const timer='<div class="tb-timer">'
+      + (active.length?'':'<h3>开始一段专注开发</h3><p>选好工作类型，结束时记录实际耗时。计时跨页面、刷新后都还在。</p>')
+      + (active.length?active.map(function(r){
+          const p=projects.find(function(x){return x.id===r.projectId;});
+          return '<div class="gd-timer-active"><div><span class="gd-eyebrow">正在计时 · '+esc(roleOf(r.owner).n)+' · '+esc(p?p.name:'未找到项目')+' · '+esc(r.category)+'</span><strong data-gd-clock="'+r.startedAt+'">'+clock(Date.now()-r.startedAt)+'</strong><p>'+esc(r.note||'专注于当前工作')+'</p></div>'
+            + '<div class="gd-timer-buttons"><button class="btn btn-primary" data-gd-stop="'+esc(r.id)+'">停止并保存工时</button><button class="btn btn-sm" data-gd-delete="devTime" data-id="'+esc(r.id)+'">舍弃本次</button></div></div>';
+        }).join(''):'')
+      + '<div class="tb-tgo"><button class="btn btn-primary btn-sm" data-gd-start>＋ 开始计时</button><button class="btn btn-sm" data-gd-new="devTime">补录工时</button></div>'
+      + '<small>计时跨页面、刷新后仍保留；关闭页面期间也会继续累计，离开工作前请停止。跨日计时按天拆分。</small>'
+      + '</div>';
+    const panels='<div class="tb-timers">'
+      + '<div class="tb-panel"><h3>👥 成员工时<small>本筛选合计 '+hours(total)+'</small></h3>'
+      + Object.entries(ROLE).map(function(kv){
+          const m=byMan[kv[0]]||0;
+          return '<div class="tb-brow"><span>'+esc(kv[1].n)+'</span>'+TBoard.bar(total?m/total*100:0,kv[1].c)+'<strong>'+hours(m)+'</strong></div>';
+        }).join('')
+      + '</div>'
+      + '<div class="tb-panel"><h3>🏷 工作类型<small>'+Object.keys(byCat).length+' 类</small></h3>'
+      + (Object.keys(byCat).length?Object.keys(byCat).sort((a,b)=>byCat[b]-byCat[a]).map(function(k){
+          return '<div class="tb-brow"><span>'+esc(k)+'</span>'+TBoard.bar(total?byCat[k]/total*100:0)+'<strong>'+hours(byCat[k])+'</strong></div>';
+        }).join(''):'<p style="font-size:11px;color:var(--muted);margin:0">这段时间还没有已保存的工时</p>')
+      + '</div></div>';
+    const detail=list.length
+      ? '<div class="tk-lane"><div class="tk-lane-hd" style="border-left-color:var(--accent);cursor:default"><span>◷ 工时明细</span><span class="cnt">'+list.length+' 段 · 合计 '+hours(total)+'</span><span class="tri" style="margin-left:auto">按日期倒序</span></div>'
+        + '<div style="padding:8px 9px;display:flex;flex-direction:column;gap:6px">'
+        + list.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))||(b._ut||0)-(a._ut||0)).map(function(r){
+            return '<div class="tb-trow"><b>'+esc(String(r.date).slice(5))+'</b><span class="cat">'+esc(r.category)+'</span><span class="tx">'+esc(r.note||'未填写说明')+'</span>'
+              + '<span class="hr">'+hours(r.minutes)+'</span><span class="ops">'+UB.ico('devTime',r.id,(DISCUSS[r.id]||[]).length)+'</span></div>';
+          }).join('')
+        + '</div></div>'
+      : this.empty('还没有符合条件的已保存工时');
+    return timer+panels+detail;
   },
   assets:function(rows) {
     if(!rows.length)return this.empty('把资产从设计跟踪到 UE 入库');
-    return '<div class="gd-card-grid">'+rows.map(function(r){
-      const progress=assetProgress(r);
-      return '<article class="gd-card"><div class="gd-card-head"><span class="gd-badge">'+esc(r.type)+'</span>'+dateHint(r.dueDate,progress.percent===100)+'</div><h3>'+esc(r.name)+'</h3><div class="gd-meta">'+(progress.percent===100?'已就绪':'制作中')+' · '+progress.count+' / '+progress.total+'</div><div class="gd-progress"><i style="width:'+progress.percent+'%"></i></div><div class="gd-checks">'+progress.stages.map(function(k){return '<label><input type="checkbox" data-gd-check="'+esc(r.id)+'" data-stage="'+k+'" '+(r.checks[k]?'checked':'')+' data-no-draft><span>'+STAGES[k]+'</span></label>';}).join('')+'</div>'+details('文件 / 资源路径',r.path)+details('备注',r.note)+actions('devAsset',r.id)+'</article>';
-    }).join('')+'</div>';
+    const COLS=[['pending','未开始'],['wip','制作中'],['ready','已就绪']];
+    const stageOf=function(r){const p=assetProgress(r);return p.percent===100?'ready':p.count===0?'pending':'wip';};
+    const card=function(r){
+      const pr=assetProgress(r);
+      const nD=(DISCUSS[r.id]||[]).length;
+      return '<div class="tk-card" data-gd-open="devAsset" data-id="'+esc(r.id)+'">'
+        + UB.head('P3',r.type,r.name,'devAsset',r.id,nD)
+        + '<div class="tb-pg">'+TBoard.bar(pr.percent,pr.percent===100?'#10b981':'var(--accent)')+'<span class="tb-pct">'+pr.count+'/'+pr.total+'</span></div>'
+        + '<div class="tb-stages">'+pr.stages.map(function(k){
+            return '<label title="'+esc(STAGES[k])+'"><input type="checkbox" data-gd-check="'+esc(r.id)+'" data-stage="'+k+'" '+(r.checks[k]?'checked':'')+' data-no-draft><span></span></label>';
+          }).join('')+'</div>'
+        + (function(){var nx=pr.stages.filter(function(k){return !(r.checks||{})[k];})[0];
+            return nx?'<div class="tk-r2"><span class="tb-k">下一步</span><span class="tk-sw" title="'+esc(STAGES[nx])+'">'+esc(STAGES[nx])+'</span></div>'
+                     :'<div class="tk-r2"><span class="tk-due done">全部阶段已完成</span></div>';})()
+        + '<div class="tk-r3">'+UB.who(r.owner)+'<span class="tk-sp"></span>'+UB.left(r.dueDate,pr.percent===100)+'</div>'
+        + (r.path?'<div class="tk-r4"><span class="tk-tag" title="'+esc(r.path)+'">'+esc(String(r.path).split('/').pop().slice(0,22))+'</span></div>':'')
+        + '</div>';
+    };
+    const list=rows.slice(), ready=list.filter(function(r){return stageOf(r)==='ready';}).length;
+    return UB.lane({icon:'▣',title:'资产流程',color:'#34d399',cls:'tb-c3',
+        sub:list.length+' 个 · 就绪 '+ready+' · 制作中 '+list.filter(function(r){return stageOf(r)==='wip';}).length,
+        tail:'点小方块 = 勾阶段',
+        cols:COLS,
+        count:function(k){return list.filter(function(r){return stageOf(r)===k;}).length;},
+        cell:function(k){return list.filter(function(r){return stageOf(r)===k;}).map(card).join('');}})
+      + '<div style="font-size:11px;color:var(--muted);line-height:1.75;margin-top:8px">每个资产按类型自带流程阶段（模型 7 步 / 场景 5 步 / 其他 3 步）—— <b>点小方块直接勾</b>，勾满自动进「已就绪」。</div>';
   },
   bind:function(box) {
     const self=this;
@@ -1272,6 +1524,8 @@ const GameDev = {
       const advance=e.target.closest('[data-gd-advance]');
       if(advance){const kind=advance.dataset.gdAdvance,r=D.devAll(kind).find(r=>r.id===advance.dataset.id),statuses=D.DEV_SCHEMA[D.KEYS[kind]].choices.status;
         if(r)try{D.devSave(kind,{status:statuses[statuses.indexOf(r.status)+1]},r.id);self.repaint();App.toast('状态已更新');}catch(err){App.toast(err.message,7000);}return;}
+      const openc=e.target.closest('[data-gd-open]');
+      if(openc){self.openEditor(openc.dataset.gdOpen,openc.dataset.id);return;}
       if(e.target.closest('[data-gd-start]')){self.startEditor();return;}
       const stop=e.target.closest('[data-gd-stop]');
       if(stop){try{D.devStopTime(stop.dataset.gdStop);self.repaint();App.toast('工时已保存');}catch(err){App.toast(err.message,7000);}return;}
@@ -1337,7 +1591,7 @@ const GameDev = {
         + slider('prog','进度',r.prog==null?0:r.prog)
         + chipGroup('area','分区',[['art','🎨 美术开发'],['prog','💻 程序开发'],['misc','🧩 通用 / 策划']],r.area || 'art',false)
         + chipGroup('stage','流程阶段',STAGE_LIST.map(function(s){return [s,s];}),r.stage || '',false)
-        + chipGroup('soft','主要软件',[['Houdini','Houdini'],['UE','UE'],['Blender','Blender']],String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean),true)
+        + chipGroup('soft','主要软件',SOFTS.map(function(s){return [s,s];}),String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean),true)
         + field('path','UE 资源路径',r.path,'text','maxlength="2000" placeholder="/Game/HuoDong/…"')
         + select('dependsOn','前置任务',tasks.map(function(t){return [t.id,t.title];}),r.dependsOn,'无前置任务')
         + select('milestoneId','所属里程碑',milestones.map(function(m){return [m.id,m.title];}),r.milestoneId,'不关联')
@@ -2332,6 +2586,79 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   @media(max-width:900px){.tk-lane-bd{grid-template-columns:repeat(2,minmax(0,1fr))}}
   @media(max-width:640px){.tk-lane-bd{grid-template-columns:1fr}.tk-proj-hd .sum{display:none}}
   @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}.card:hover,.gd-card:hover,.gd-task:hover{transform:none}}
+
+  /* ===== v3-18 · 统一看板层（tb-*）：里程碑 / BUG / 日志 / 工时 / 资产 =====
+     目标：这 5 个面板和「任务看板」长同一张脸 —— 同 KPI 条、同泳道列、
+     同紧凑卡（P 级 pill + 标题 + 信息行 + hover 图标动作）、同剩余天数说法。
+     全部走既有主题令牌，6 套主题自动跟随。 */
+  .tb-c4.tk-lane-bd{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .tk-lane-bd.tb-c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .tk-lane-bd.tb-c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tb-desc{font-size:10.5px;color:var(--muted);line-height:1.55;margin-top:5px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .tb-k{font-size:10px;color:var(--muted);opacity:.85;white-space:nowrap}
+  .tb-pg{display:flex;align-items:center;gap:6px;margin-top:6px}
+  .tb-pct{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+  .tb-line{display:flex;gap:6px;font-size:10.5px;line-height:1.6;margin-top:3px;color:var(--text)}
+  .tb-line i{font-style:normal;flex:0 0 26px;color:var(--muted);opacity:.8;font-size:10px;padding-top:1px}
+  .tb-line span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .tb-line.warn i{color:#f5a524;opacity:1}
+  .tb-line.ok i{color:#10b981;opacity:1}
+  .tb-adv{font-size:9.5px;border:1px solid var(--card-border);border-radius:5px;padding:0 6px;background:var(--card-bg);color:var(--muted);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.7}
+  .tb-adv:hover{border-color:var(--accent);color:var(--accent)}
+  .tk-own-ro{cursor:default}
+  /* 资产阶段点（保留 input[data-gd-check] 原交互，只换外观） */
+  .tb-stages{display:flex;gap:3px;flex-wrap:wrap;margin-top:6px}
+  .tb-stages label{position:relative;cursor:pointer;display:inline-flex}
+  .tb-stages input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;width:100%;height:100%}
+  .tb-stages span{width:15px;height:15px;border-radius:4px;border:1px solid var(--card-border);background:var(--card-bg);display:block;position:relative}
+  .tb-stages input:checked+span{background:color-mix(in srgb,var(--accent) 82%,#fff);border-color:var(--accent)}
+  .tb-stages input:checked+span:after{content:'';position:absolute;left:4px;top:1px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}
+  .tb-stages label:hover span{border-color:var(--accent)}
+  /* 开发日志时间线 */
+  .tb-loglist{display:flex;flex-direction:column;gap:8px}
+  .tb-logrow{display:grid;grid-template-columns:62px minmax(0,1fr);gap:9px;align-items:start}
+  .tb-logdate{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding-top:7px}
+  .tb-logdate b{font-size:14px;font-weight:750;font-variant-numeric:tabular-nums;line-height:1.1}
+  .tb-logdate i{font-style:normal;font-size:9.5px;color:var(--muted);opacity:.75}
+  .tb-logdate span{font-size:9.5px;color:var(--muted);opacity:.9}
+  .tk-card.tb-logcard{padding:9px 11px}
+  /* 工时 */
+  .tb-timer{border:1px solid var(--card-border);border-radius:12px;background:var(--card-bg);padding:14px 15px;margin-bottom:10px}
+  .tb-timer h3{margin:0 0 4px;font-size:13.5px}
+  .tb-timer p{margin:0;font-size:11.5px;color:var(--muted);line-height:1.7}
+  .tb-timer small{display:block;font-size:10.5px;line-height:1.85;color:var(--muted);margin-top:12px;opacity:.9}
+  .tb-timer .tb-tgo{margin-top:11px;display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+  .tb-timers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:10px}
+  .tb-panel{border:1px solid var(--card-border);border-radius:12px;background:var(--card-bg);padding:11px 13px}
+  .tb-panel h3{margin:0 0 9px;font-size:12px;display:flex;align-items:center;gap:6px}
+  .tb-panel h3 small{font-weight:500;color:var(--muted);font-size:10.5px;margin-left:auto}
+  .tb-brow{display:flex;align-items:center;gap:8px;font-size:11px;padding:2px 0}
+  .tb-brow span{flex:0 0 66px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tb-brow strong{flex:0 0 52px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+  .tb-trow{display:grid;grid-template-columns:62px 66px minmax(0,1fr) auto auto;gap:9px;align-items:center;border:1px solid var(--card-border);border-radius:10px;background:var(--card-bg-2);padding:7px 10px;font-size:11.5px}
+  .tb-trow>b{font-weight:700;font-variant-numeric:tabular-nums}
+  .tb-trow .cat{font-size:10px;color:var(--muted);border:1px solid var(--card-border);border-radius:5px;padding:0 5px;white-space:nowrap;justify-self:start}
+  .tb-trow .tx{color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tb-trow .hr{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tb-trow .ops{display:flex;gap:1px;opacity:.5}
+  .tb-trow:hover .ops{opacity:1}
+  .tb-empty2{border:1px dashed var(--card-border);border-radius:11px;padding:18px;text-align:center;color:var(--muted);font-size:12px}
+  /* 手机上没有 hover → 图标动作常显一半，否则根本点不到 */
+  @media(hover:none){.tk-card .tk-ico{opacity:.72}}
+  @media(max-width:900px){
+    .tk-lane-bd.tb-c3,.tk-lane-bd.tb-c4,.tb-timers{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+  @media(max-width:640px){
+    .tk-lane-bd.tb-c3,.tk-lane-bd.tb-c4,.tk-lane-bd.tb-c2,.tb-timers{grid-template-columns:1fr}
+    .tb-logrow{grid-template-columns:52px minmax(0,1fr)}
+    .tb-trow{grid-template-columns:52px minmax(0,1fr) auto;row-gap:3px}
+    .tb-trow .tx{grid-column:1/-1}
+  }
+  .tk-pri.tb-ok{background:#10b981;color:#fff}
+  .tk-card.tb-logcard{position:relative}
+  .tb-loghd{position:absolute;right:5px;top:5px}
+  .tb-logcard .tb-line.main span{font-weight:600;color:var(--text);font-size:11.5px;line-height:1.65;-webkit-line-clamp:3;padding-right:44px}
+  .tb-stages span{width:16px;height:16px}
 `;
 
   /* ============================================================
