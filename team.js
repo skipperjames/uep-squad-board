@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.11.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.12.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -342,6 +342,146 @@
     const added=[];
     hit.forEach(function(k){M[k]=M[k]||[];M[k].push({t:now(),by:CONFIG.me,cid:cardId||'',x:String(text).slice(0,140)});if(M[k].length>30)M[k].shift();added.push(ROLE[k].n);});
     return added;
+  }
+  /* ---------- v3-22 · 卡片就地编辑三件事 ----------
+     22 双击标题就地改 / 30 卡上直接回讨论 / 32 卡内子任务勾选
+     原则：能在这张卡上做完的，就别让人离开这张卡。 */
+  function taskProg(t) {
+    const subs = Array.isArray(t.subtasks) ? t.subtasks : [];
+    if (subs.length) return Math.round(subs.filter(function (x) { return x.done; }).length / subs.length * 100);
+    if (t.prog == null) return null;
+    return Math.max(0, Math.min(100, Number(t.prog)));
+  }
+  function repaintLater() { try { GameDev.repaint(); } catch (e) {} }
+
+  /* 双击标题 → 就地输入框（Enter 存，Esc 放弃，失焦也存） */
+  function inlineTitle(el) {
+    const card = el.closest('[data-tk-card]');
+    if (!card) return;
+    const id = card.dataset.tkCard;
+    const t = D.devAll('devTask').filter(function (x) { return x.id === id; })[0];
+    if (!t) return;
+    const old = String(t.title || '');
+    const inp = document.createElement('input');
+    inp.className = 'tk-title-edit';
+    inp.value = old;
+    el.replaceWith(inp);
+    inp.focus();
+    try { inp.select(); } catch (e) {}
+    let done = false;
+    function commit(save) {
+      if (done) return;
+      done = true;
+      const v = String(inp.value || '').trim();
+      if (save && v && v !== old) {
+        try { D.devSave('devTask', { title: v }, id); App.toast('标题已改'); }
+        catch (err) { App.toast(err.message, 7000); }
+      }
+      repaintLater();
+    }
+    inp.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    inp.addEventListener('blur', function () { setTimeout(function () { commit(true); }, 160); });
+  }
+
+  /* 卡上回讨论：点那一行 → 变成输入框 */
+  function startReply(node) {
+    if (node.querySelector('.tk-reply-in')) return;
+    const id = node.dataset.tkReply;
+    const tx = node.querySelector('.tx');
+    if (tx) tx.style.display = 'none';
+    const inp = document.createElement('input');
+    inp.className = 'tk-reply-in';
+    inp.placeholder = '回复…（@ 可点名）';
+    node.appendChild(inp);
+    inp.focus();
+    let done = false;
+    function commit(send) {
+      if (done) return;
+      done = true;
+      const v = String(inp.value || '').trim();
+      if (send && v) replyToTask(id, v);
+      else repaintLater();
+    }
+    inp.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    inp.addEventListener('blur', function () { setTimeout(function () { commit(true); }, 180); });
+  }
+  function replyToTask(id, text) {
+    const v = String(text || '').trim();
+    if (!v) return;
+    const before = clone(collectLocal());
+    (DISCUSS[id] = DISCUSS[id] || []).push({ u: CONFIG.me, t: tick(), x: v });
+    log('discuss', id, '开发记录讨论');
+    let at = [];
+    try { at = notifyMentions(v, id); } catch (e) {}
+    try {
+      save();
+      repaintLater();
+      try { App.toast(at.length ? ('已发送 · 提醒了 ' + at.join('、')) : '已发送到讨论'); } catch (e) {}
+    } catch (err) {
+      applyState(before);
+      try { App.toast(err.message, 'warn'); } catch (e) {}
+    }
+  }
+
+  /* 子任务：加一步 / 删一步 / 勾选 */
+  function addSub(id, text) {
+    const t = D.devAll('devTask').filter(function (x) { return x.id === id; })[0];
+    if (!t) return;
+    const subs = (Array.isArray(t.subtasks) ? t.subtasks : []).slice();
+    subs.push({ id: 's' + Date.now().toString(36), text: String(text).slice(0, 80), done: false });
+    D.devSave('devTask', { subtasks: subs }, id);
+    repaintLater();
+  }
+  function delSub(id, idx) {
+    const t = D.devAll('devTask').filter(function (x) { return x.id === id; })[0];
+    if (!t) return;
+    const subs = (Array.isArray(t.subtasks) ? t.subtasks : []).slice();
+    subs.splice(Number(idx), 1);
+    try { D.devSave('devTask', { subtasks: subs }, id); }
+    catch (e) { try { App.toast('删除失败：' + e.message, 7000); } catch (x) {} }
+    repaintLater();
+  }
+  function startSubAdd(btn) {
+    const card = btn.closest('[data-tk-card]');
+    if (!card || card.querySelector('.tk-sub-add')) return;
+    const id = btn.dataset.tkSubadd;
+    let host = card.querySelector('.tk-subs');
+    if (!host) {
+      host = document.createElement('div');
+      host.className = 'tk-subs';
+      host.innerHTML = '<div class="tk-subs-hd"><b>0/0</b><span class="bar"><i style="width:0%"></i></span></div>';
+      const rp = card.querySelector('.tk-reply');
+      if (rp) card.insertBefore(host, rp); else card.appendChild(host);
+    }
+    const row = document.createElement('label');
+    row.className = 'tk-sub tk-sub-add';
+    row.innerHTML = '<input type="checkbox" disabled><input class="tk-reply-in" placeholder="加一步…">';
+    const list = host.querySelector('.tk-sub-more');
+    if (list) host.insertBefore(row, list); else host.appendChild(row);
+    const inp = row.querySelector('.tk-reply-in');
+    inp.focus();
+    let done = false;
+    function commit(send) {
+      if (done) return;
+      done = true;
+      const v = String(inp.value || '').trim();
+      if (send && v) addSub(id, v);
+      else repaintLater();
+    }
+    inp.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    inp.addEventListener('blur', function () { setTimeout(function () { commit(true); }, 180); });
   }
   /* ---------- v3-21 · 通用小菜单（状态点 / 右键共用） ----------
      挂进 .t-root 才拿得到主题变量（挂 shadowRoot 会透明，v3-19 踩过）。
@@ -1013,6 +1153,27 @@ function actions(kind,id,extra) {
             const locked = !!(lk && lk.by && lk.by!==CONFIG.me && (now()-(lk.at||0)) < 15*60000);
             const nD = (DISCUSS[t.id]||[]).length;
             const ms = t.milestoneId ? (D.devAll('devMilestone')||[]).filter(m=>m.id===t.milestoneId)[0] : null;
+            const subsA = Array.isArray(t.subtasks) ? t.subtasks : [];
+            const subDone = subsA.filter(function (x) { return x.done; }).length;
+            const subsRow = subsA.length ? '<div class="tk-subs">'
+              + '<div class="tk-subs-hd"><b>'+subDone+'/'+subsA.length+'</b>'
+              + '<span class="bar"><i style="width:'+Math.round(subDone/subsA.length*100)+'%"></i></span>'
+              + '</div>'
+              + subsA.slice(0,3).map(function (sb, si) {
+                  return '<label class="tk-sub'+(sb.done?' done':'')+'"><input type="checkbox" data-tk-sub="'+esc(t.id)+'|'+si+'"'+(sb.done?' checked':'')+' data-no-draft><span>'+esc(sb.text)+'</span>'
+                    + '<button type="button" class="del" data-tk-subdel="'+esc(t.id)+'|'+si+'" title="删掉这步">×</button></label>';
+                }).join('')
+              + (subsA.length>3 ? '<div class="tk-sub-more">还有 '+(subsA.length-3)+' 步</div>' : '')
+              + '</div>' : '';
+            const dList = DISCUSS[t.id] || [];
+            const dLast = dList[dList.length-1];
+            const replyRow = '<div class="tk-reply" data-tk-reply="'+esc(t.id)+'" title="点一下就地回复">'
+              + '<span class="ic">💬</span>'
+              + (dLast ? '<span class="tx"><b style="color:'+esc(roleOf(dLast.u).c)+'">'+esc(roleOf(dLast.u).n)+'</b>：'+esc(String(dLast.x).slice(0,28))+'</span>'
+                       : '<span class="tx dim">回复…</span>')
+              + (dList.length>1 ? '<span class="tk-mut2">'+dList.length+'</span>' : '')
+              + '<button type="button" class="tk-subadd-inline" data-tk-subadd="'+esc(t.id)+'" title="加一步子任务">＋</button>'
+              + '</div>';
             s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+(locked?' locked':'')+'" draggable="true" data-tk-card="'+esc(t.id)+'" data-tk-open="'+esc(t.id)+'">'
               + '<div class="tk-r1"><button type="button" class="tk-stbtn" data-tk-st="'+esc(t.id)+'" title="点一下换列（现在：'+esc(this.stName(t.status))+'）" style="background:'+(TB_ST[t.status]||'#888')+'"></button>'
               +   '<span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span>'
@@ -1036,6 +1197,7 @@ function actions(kind,id,extra) {
                     + (ms?'<span class="tk-tag">🚩 '+esc(ms.title)+'</span>':'')
                     + (fresh?'<span class="tk-tag">'+(mins<=1?'刚刚更新':mins+' 分钟前更新')+'</span>':'')
                   + '</div>' : '')
+              + subsRow + replyRow
               + '</div>';
           });
           if(!sub.length) s += '<div class="tk-dim" style="font-size:11px;padding:3px 2px">—</div>';
@@ -1194,7 +1356,7 @@ function actions(kind,id,extra) {
       if(blocked.length) s += '<div class="tk-rsec">被前置挡住 · '+blocked.length+'</div>'
         + blocked.map(t=>'<div class="tk-rrow" data-tk-open="'+esc(t.id)+'"><span style="color:#f5a524;font-size:10px">⛓</span><span class="t">'+esc(t.title)+'</span>'+this.av(t.owner)+'</div>').join('');
       s += '<div class="tk-rsec">怎么用</div><div style="font-size:11px;color:var(--muted);line-height:1.75">'
-        + '单击卡片 → 这栏切「任务详情」；<b>双击</b> → 打开编辑弹窗（Esc / 点空白都能关，改过会先问一次）。</div>';
+        + '单击卡片 → 这栏切「任务详情」；<b>双击标题</b>就地改名，双击卡片别处开编辑弹窗；点底部 💬 那行直接回复，子任务勾选即时保存。</div>';
       return s;
     },
     /* ---- 主渲染 ---- */
@@ -1224,6 +1386,15 @@ function actions(kind,id,extra) {
     /* ---- 事件 ---- */
     bind(box, g, App){
       const self = this;
+      /* v3-22：删子任务按钮单独挂一个更早的 capture 监听 —— 它长在 <label> 里，
+         主委托链容易被上层分支先吃掉，这里第一顺位拦，命中就停。 */
+      box.addEventListener('click', function(e){
+        const d = e.target.closest('[data-tk-subdel]');
+        if(!d) return;
+        e.preventDefault(); e.stopPropagation();
+        const p = String(d.dataset.tkSubdel||'').split('|');
+        delSub(p[0], p[1]);
+      }, true);
       box.addEventListener('click', function(e){
         const el = e.target;
         const v = el.closest('[data-tk-view]');
@@ -1274,17 +1445,31 @@ function actions(kind,id,extra) {
           return;
         }
         if(el.closest('input,select,textarea')) return;
+        if(el.closest('.tk-sub,.tk-subs')) return;   /* v3-22：子任务区不算「点卡片开详情」 */
         /* v3-21：卡片里的快捷按钮，必须抢在「打开详情」之前拦掉 */
         const stb = el.closest('[data-tk-st]');
         if(stb){ e.stopPropagation(); self.statusMenu(stb, stb.dataset.tkSt, g); return; }
         const clm = el.closest('[data-tk-claim]');
         if(clm){ e.stopPropagation(); self.claimTask(clm.dataset.tkClaim, g); return; }
+        /* v3-22：卡内就地编辑，一律拦在「打开详情」之前 */
+        const sba = el.closest('[data-tk-subadd]');
+        if(sba){ e.stopPropagation(); startSubAdd(sba); return; }
+        const rpl = el.closest('[data-tk-reply]');
+        if(rpl){ e.stopPropagation(); startReply(rpl); return; }
+        const sbd = el.closest('[data-tk-subdel]');
+        if(sbd){ e.stopPropagation(); e.preventDefault(); const pp=String(sbd.dataset.tkSubdel||'').split('|'); delSub(pp[0], pp[1]); return; }
+        /* 子任务勾选必须放行到 target（capture 阶段 stopPropagation 会让 checkbox 根本不切换），
+           只在这里 return；后面的「打开详情」由 GameDev 侧排除 .tk-sub/.tk-subs 兜住 */
+        if(el.closest('.tk-sub,.tk-subs')) return;
         /* 卡片上的 💬/🕘/✏️/换负责人 走原有 data-gd-* 处理器，别再顺带选中卡片 */
         if(el.closest('[data-gd-disc],[data-gd-history],[data-gd-edit],[data-gd-owner]')) return;
         const op = el.closest('[data-tk-open]');
         if(op){ self.rsel = op.dataset.tkOpen; self.rmode = 'task'; g.repaint(); return; }
       }, true);
       box.addEventListener('dblclick', function(e){
+        if(e.target.closest('input,textarea,.tk-reply,.tk-subs')) return;
+        const tt = e.target.closest('[data-tk-card] .tt');
+        if(tt){ e.preventDefault(); e.stopPropagation(); inlineTitle(tt); return; }
         const op = e.target.closest('[data-tk-open]');
         if(op){ e.preventDefault(); g.openEditor('devTask', op.dataset.tkOpen); }
       });
@@ -1297,6 +1482,18 @@ function actions(kind,id,extra) {
       });
       box.addEventListener('change', function(e){
         const el = e.target;
+        const sb = el.closest('[data-tk-sub]');
+        if(sb){
+          const pr = String(sb.dataset.tkSub||'').split('|'), id = pr[0], idx = Number(pr[1]);
+          const t = D.devAll('devTask').filter(function(x){return x.id===id;})[0];
+          if(t){
+            const subs = (Array.isArray(t.subtasks)?t.subtasks:[]).slice();
+            if(subs[idx]) subs[idx] = Object.assign({}, subs[idx], {done: !!sb.checked});
+            try{ D.devSave('devTask',{subtasks:subs},id); g.repaint(); }
+            catch(err){ sb.checked = !sb.checked; App.toast(err.message,7000); }
+          }
+          return;
+        }
         const ck = el.closest('[data-tk-sel]');
         if(ck){
           const id = ck.dataset.tkSel;
@@ -2882,6 +3079,40 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   @media(max-width:640px){.tk-lane-bd{grid-template-columns:1fr}.tk-proj-hd .sum{display:none}}
   @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}.card:hover,.gd-card:hover,.gd-task:hover{transform:none}}
 
+  /* ===== v3-22 · 双击改标题 / 卡上回讨论 / 卡内子任务 ===== */
+  .tk-title-edit{width:100%;border:1px solid var(--accent);border-radius:5px;background:var(--card-bg);color:var(--text);
+    font:inherit;font-size:12px;font-weight:600;padding:1px 4px;outline:none;font-family:inherit;min-width:0}
+  .tk-card .tk-r1 .tt{cursor:text}
+  .tk-reply{margin-top:6px;padding-top:5px;border-top:1px dashed var(--card-border);display:flex;align-items:center;gap:5px;
+    font-size:10px;color:var(--muted);cursor:text;min-height:17px}
+  .tk-reply .ic{font-size:9.5px;opacity:.8;flex:0 0 auto}
+  .tk-reply .tx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-reply .tx.dim{opacity:.55}
+  .tk-reply:hover{color:var(--text)}
+  .tk-reply:hover .tx.dim{opacity:.9}
+  .tk-reply-in{flex:1 1 auto;min-width:0;border:none;background:var(--card-bg);color:var(--text);font:inherit;font-size:10.5px;
+    padding:2px 5px;border-radius:4px;outline:1px solid var(--accent);font-family:inherit}
+  .tk-subs{margin-top:6px;padding-top:5px;border-top:1px dashed var(--card-border)}
+  .tk-subs-hd{display:flex;align-items:center;gap:6px;font-size:9.5px;color:var(--muted);margin-bottom:3px}
+  .tk-subs-hd b{color:var(--text);font-weight:700}
+  .tk-subs-hd .bar{flex:1 1 auto;height:3px;border-radius:2px;background:var(--card-border);overflow:hidden}
+  .tk-subs-hd .bar i{display:block;height:100%;background:#10b981;border-radius:2px;transition:width .2s}
+  .tk-subs-hd button{border:1px dashed var(--card-border);background:none;color:var(--muted);border-radius:4px;font-size:9px;
+    padding:0 4px;cursor:pointer;font-family:inherit;line-height:1.6}
+  .tk-subs-hd button:hover{border-color:var(--accent);color:var(--accent);border-style:solid}
+  .tk-sub{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text);padding:1px 0;cursor:pointer}
+  .tk-sub input[type=checkbox]{width:11px;height:11px;accent-color:var(--accent);cursor:pointer;flex:0 0 auto;margin:0}
+  .tk-sub span{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-sub.done span{color:var(--muted);text-decoration:line-through;opacity:.7}
+  .tk-sub .del{opacity:0;border:none;background:none;color:var(--muted);cursor:pointer;font-size:10px;padding:0 2px;line-height:1;font-family:inherit}
+  .tk-sub:hover .del{opacity:.6}
+  .tk-sub .del:hover{color:#ef4444;opacity:1}
+  .tk-sub-more{font-size:9px;color:var(--muted);opacity:.7;padding-top:1px}
+  .tk-sub-more:hover{opacity:1;cursor:pointer}
+  .tk-subadd-inline{border:1px dashed var(--card-border);background:none;color:var(--muted);border-radius:4px;font-size:9.5px;
+    padding:0 4px;cursor:pointer;font-family:inherit;line-height:1.7;flex:0 0 auto;opacity:.55;transition:.14s}
+  .tk-reply:hover .tk-subadd-inline{opacity:1}
+  .tk-subadd-inline:hover{border-style:solid;border-color:var(--accent);color:var(--accent)}
   /* ===== v3-21 · 状态点换列 / 卡片右键菜单 / 我来做认领 ===== */
   .tk-stbtn{width:9px;height:9px;border-radius:50%;border:none;padding:0;cursor:pointer;flex:0 0 auto;margin-top:4px;position:relative;transition:transform .14s}
   .tk-stbtn:hover{transform:scale(1.4)}
