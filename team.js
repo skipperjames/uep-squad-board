@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.12.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.12.1-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -1187,7 +1187,6 @@ function actions(kind,id,extra) {
               +   (softs.length?softs.map(x=>'<span class="tk-sw">'+esc(x)+'</span>').join(''):'<span class="tk-dim2">未指定软件</span>')
               +   (t.path?'<span class="tk-sw" title="'+esc(t.path)+'">UE 路径</span>':'')+'</div>'
               + '<div class="tk-r3"><button type="button" class="tk-own" data-gd-owner="'+esc(t.id)+'" title="点击更换负责人">'+this.av(t.owner)+'<b>'+esc(this.ownerName(t.owner))+'</b></button>'
-              +   (ownerIds(t.owner).indexOf(CONFIG.me)<0 ? '<button type="button" class="tb-claim" data-tk-claim="'+esc(t.id)+'" title="认领这张卡（也可以多人一起做）">＋ 我来做</button>' : '')
               +   '<span class="tk-sp"></span>'
               +   (t.dueDate ? this.due(t)+'<span class="tk-mut2">'+esc(String(t.dueDate).slice(5))+'</span>' : '<span class="tk-nodue">未排期</span>')
               + '</div>'
@@ -1449,8 +1448,6 @@ function actions(kind,id,extra) {
         /* v3-21：卡片里的快捷按钮，必须抢在「打开详情」之前拦掉 */
         const stb = el.closest('[data-tk-st]');
         if(stb){ e.stopPropagation(); self.statusMenu(stb, stb.dataset.tkSt, g); return; }
-        const clm = el.closest('[data-tk-claim]');
-        if(clm){ e.stopPropagation(); self.claimTask(clm.dataset.tkClaim, g); return; }
         /* v3-22：卡内就地编辑，一律拦在「打开详情」之前 */
         const sba = el.closest('[data-tk-subadd]');
         if(sba){ e.stopPropagation(); startSubAdd(sba); return; }
@@ -3117,9 +3114,6 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tk-stbtn{width:9px;height:9px;border-radius:50%;border:none;padding:0;cursor:pointer;flex:0 0 auto;margin-top:4px;position:relative;transition:transform .14s}
   .tk-stbtn:hover{transform:scale(1.4)}
   .tk-stbtn:after{content:'';position:absolute;inset:-6px}
-  .tb-claim{font-size:9.5px;border:1px dashed var(--card-border);border-radius:5px;padding:0 5px;background:none;color:var(--muted);
-    cursor:pointer;font-family:inherit;line-height:1.8;white-space:nowrap;flex:0 0 auto;transition:.14s}
-  .tb-claim:hover{border-style:solid;border-color:var(--accent);color:var(--accent)}
   .tb-menu{position:fixed;z-index:9998;background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;
     box-shadow:0 16px 44px rgba(0,0,0,.45);padding:4px;min-width:168px}
   .tb-menu-hd{font-size:9.5px;color:var(--muted);padding:4px 9px 5px;letter-spacing:.02em}
