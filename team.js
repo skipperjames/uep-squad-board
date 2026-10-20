@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.13.0-20261019
+   team.js —— UE 团队看板「植入工具」  v2.14.0-20261020
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.13.0-20261019'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.14.0-20261020'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -881,11 +881,28 @@ function actions(kind,id,extra) {
   const TB_ST = { backlog:'#94a3b8', doing:'var(--accent)', review:'#f5a524', done:'#10b981' };
   const TB_AREAS = [['art','🎨 美术开发','#e879f9'],['prog','💻 程序开发','#34d399'],['misc','🧩 通用 / 策划','#94a3b8']];
   const TBoard = {
-    view:'lane', rail:true, rmode:'today', rsel:'', den:'1', projOpen:false,
+    view:'lane', rail:true, rmode:'today', rsel:'', den:'1', projOpen:false, cd:'auto', cellOpen:{},
     grp:{}, laneMin:{}, sel:new Set(), sort:{k:'dueDate',dir:1}, trash:[], kw:'',
     /* ---- 基础 ---- */
     stOrder(){ return D.DEV_SCHEMA.devTasks.choices.status.slice(); },
     stName(s){ return LABELS[s] || s; },
+    /* ============================================================
+       v2.14.0 · 卡片密度（86/87/90）
+       ------------------------------------------------------------
+       comfy 舒适 · tight 紧凑（元信息并进负责人行）· row 列表（一行）
+       auto（默认）：按「主区宽度 / 4」估列宽自适应 —— 不监听 resize，
+       每次渲染现算，不会和用户手选打架。
+       ============================================================ */
+    cdEff(){
+      if(this.cd && this.cd !== 'auto') return this.cd;
+      const win = (typeof window !== 'undefined' ? window.innerWidth : 1440) || 1440;
+      const railW = this.rail ? 330 : 60;
+      const colW = Math.max(120, (win - railW - 96) / 4);
+      if(colW < 210) return 'row';
+      if(colW < 275) return 'tight';
+      return 'comfy';
+    },
+    cellOpenKey(area, st){ return String(area || 'misc') + '|' + st; },
     stack(tasks, projectId, member){
       let list = tasks;
       if(member) list = list.filter(t => ownerIds(t.owner).indexOf(member) >= 0);
@@ -1141,12 +1158,15 @@ function actions(kind,id,extra) {
           + '</div><div class="tk-lane-bd">';
         this.stOrder().forEach(k=>{
           const sub = list.filter(t=>t.status===k);
-          s += '<div class="tk-cell" data-tk-cell="'+esc(k)+'" data-tk-area="'+esc(A[0])+'"><div class="ct">'+this.stName(k)+' '+sub.length+'</div>';
-          sub.forEach(t=>{
+          const cd = this.cdEff();
+          const openKey = this.cellOpenKey(A[0], k);
+          const cellOpen = !!this.cellOpen[openKey];
+          const shown = cellOpen ? sub : sub.slice(0, 3);
+          s += '<div class="tk-cell' + (cd === 'row' ? ' tk-cell-row' : '') + '" data-tk-cell="'+esc(k)+'" data-tk-area="'+esc(A[0])+'"><div class="ct">'+this.stName(k)+' '+sub.length+'</div>';
+          shown.forEach(t=>{
             const dep = t.dependsOn ? this.find(all, t.dependsOn) : null;
             const blocked = dep && dep.status !== 'done';
             const softs = String(t.soft||'').split(/[,，;；\s]+/).filter(Boolean);
-            const arLab = (TB_AREAS.filter(a=>a[0]===(t.area||'misc'))[0] || ['','🧩 未分区'])[1];
             const mins = t._ut ? Math.max(1, Math.round((Date.now()-t._ut)/60000)) : null;
             const fresh = !!(t.updatedBy && t.updatedBy!==CONFIG.me && mins && mins < 180);
             const lk = t.lockedBy;
@@ -1155,51 +1175,80 @@ function actions(kind,id,extra) {
             const ms = t.milestoneId ? (D.devAll('devMilestone')||[]).filter(m=>m.id===t.milestoneId)[0] : null;
             const subsA = Array.isArray(t.subtasks) ? t.subtasks : [];
             const subDone = subsA.filter(function (x) { return x.done; }).length;
-            const subsRow = subsA.length ? '<div class="tk-subs">'
-              + '<div class="tk-subs-hd"><b>'+subDone+'/'+subsA.length+'</b>'
-              + '<span class="bar"><i style="width:'+Math.round(subDone/subsA.length*100)+'%"></i></span>'
-              + '</div>'
-              + subsA.slice(0,3).map(function (sb, si) {
-                  return '<label class="tk-sub'+(sb.done?' done':'')+'"><input type="checkbox" data-tk-sub="'+esc(t.id)+'|'+si+'"'+(sb.done?' checked':'')+' data-no-draft><span>'+esc(sb.text)+'</span>'
-                    + '<button type="button" class="del" data-tk-subdel="'+esc(t.id)+'|'+si+'" title="删掉这步">×</button></label>';
-                }).join('')
-              + (subsA.length>3 ? '<div class="tk-sub-more">还有 '+(subsA.length-3)+' 步</div>' : '')
-              + '</div>' : '';
             const dList = DISCUSS[t.id] || [];
             const dLast = dList[dList.length-1];
-            const replyRow = '<div class="tk-reply" data-tk-reply="'+esc(t.id)+'" title="点一下就地回复">'
+
+            const head = '<button type="button" class="tk-stbtn" data-tk-st="'+esc(t.id)+'" title="点一下换列（现在：'+esc(this.stName(t.status))+'）" style="background:'+(TB_ST[t.status]||'#888')+'"></button>'
+              + '<span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span>';
+            const ico = '<span class="tk-ico">'
+              + '<button type="button" class="tk-ib" data-gd-disc="devTask" data-id="'+esc(t.id)+'" title="团队讨论">💬'+(nD?'<b>'+nD+'</b>':'')+'</button>'
+              + '<button type="button" class="tk-ib" data-gd-history="'+esc(t.id)+'" title="历史操作记录">🕘</button>'
+              + '<button type="button" class="tk-ib" data-gd-edit="devTask" data-id="'+esc(t.id)+'" title="编辑任务">✏️</button>'
+              + '<button type="button" class="tk-ib hoveronly" data-tk-subadd="'+esc(t.id)+'" title="加一步子任务">＋</button>'
+              + '</span>';
+            const dueHtml = t.dueDate ? this.due(t)+'<span class="tk-mut2">'+esc(String(t.dueDate).slice(5))+'</span>' : '<span class="tk-nodue">未排期</span>';
+            const ownBtn = '<button type="button" class="tk-own" data-gd-owner="'+esc(t.id)+'" title="点击更换负责人">'+this.av(t.owner)+'<b>'+esc(this.ownerName(t.owner))+'</b></button>';
+
+            let body = '';
+            if(cd === 'row'){
+              /* 列表档（88 的落地）：一行 —— P2 · 标题 · 头像 · 到期 */
+              body = '<div class="tk-r1">'+head+'</div>'
+                + '<span class="tk-rowmeta">'+this.av(t.owner)+'<em>'+dueHtml+'</em></span>';
+            } else if(cd === 'tight'){
+              /* 紧凑档（87）：标题一行，元信息并进负责人行 */
+              const bits = [];
+              if(t.stage) bits.push('<span>'+esc(t.stage)+'</span>');
+              softs.forEach(function(x){ bits.push('<span class="tk-sw">'+esc(x)+'</span>'); });
+              if(t.path) bits.push('<span class="tk-sw" title="'+esc(t.path)+'">UE</span>');
+              body = '<div class="tk-r1">'+head+ico+'</div>'
+                + '<div class="tk-r3 tk-r23">'+ownBtn+'<span class="tk-sp"></span>'
+                +   (bits.length ? '<span class="tk-r23m">'+bits.join(' · ')+'</span>' : '')
+                +   (dList.length ? '<span class="tk-cico" title="有 '+dList.length+' 条讨论">💬'+dList.length+'</span>' : '')
+                +   (subsA.length ? '<span class="tk-cbar" title="子任务 '+subDone+'/'+subsA.length+'"><i style="width:'+Math.round(subDone/subsA.length*100)+'%"></i></span>' : '')
+                +   dueHtml
+                + '</div>';
+            } else {
+              /* 舒适档：分区名不显示（82）、空值不占位（83） */
+              const r2 = [];
+              if(t.stage) r2.push('<span>'+esc(t.stage)+'</span>');
+              softs.forEach(function(x){ r2.push('<span class="tk-sw">'+esc(x)+'</span>'); });
+              if(t.path) r2.push('<span class="tk-sw" title="'+esc(t.path)+'">UE 路径</span>');
+              body = '<div class="tk-r1">'+head+ico+'</div>'
+                + (r2.length ? '<div class="tk-r2">'+r2.join('<i>·</i>')+'</div>' : '')
+                + '<div class="tk-r3">'+ownBtn+'<span class="tk-sp"></span>'+dueHtml+'</div>'
+                + ((locked||dep||ms||fresh) ? '<div class="tk-r4">'
+                      + (locked?'<span class="tk-lk">🔒 '+esc(this.ownerName(lk.by))+' 正在编辑</span>':'')
+                      + (dep?'<span class="tk-wait2'+(blocked?' blocked':'')+'">⛓ '+esc(dep.title)+'</span>':'')
+                      + (ms?'<span class="tk-tag">🚩 '+esc(ms.title)+'</span>':'')
+                      + (fresh?'<span class="tk-tag">'+(mins<=1?'刚刚更新':mins+' 分钟前更新')+'</span>':'')
+                    + '</div>' : '')
+                + (subsA.length ? '<div class="tk-subs">'
+                    + '<div class="tk-subs-hd"><b>'+subDone+'/'+subsA.length+'</b>'
+                    + '<span class="bar"><i style="width:'+Math.round(subDone/subsA.length*100)+'%"></i></span>'
+                    + '</div>'
+                    + subsA.slice(0,3).map(function (sb, si) {
+                        return '<label class="tk-sub'+(sb.done?' done':'')+'"><input type="checkbox" data-tk-sub="'+esc(t.id)+'|'+si+'"'+(sb.done?' checked':'')+' data-no-draft><span>'+esc(sb.text)+'</span>'
+                          + '<button type="button" class="del" data-tk-subdel="'+esc(t.id)+'|'+si+'" title="删掉这步">×</button></label>';
+                      }).join('')
+                    + (subsA.length>3 ? '<div class="tk-sub-more">还有 '+(subsA.length-3)+' 步</div>' : '')
+                    + '</div>' : '');
+            }
+
+            /* 84：有讨论才占一行；没讨论时「＋」并入 r1 图标组，hover 才浮出 */
+            const replyRow = dList.length ? '<div class="tk-reply" data-tk-reply="'+esc(t.id)+'" title="点一下就地回复">'
               + '<span class="ic">💬</span>'
-              + (dLast ? '<span class="tx"><b style="color:'+esc(roleOf(dLast.u).c)+'">'+esc(roleOf(dLast.u).n)+'</b>：'+esc(String(dLast.x).slice(0,28))+'</span>'
-                       : '<span class="tx dim">回复…</span>')
+              + '<span class="tx"><b style="color:'+esc(roleOf(dLast.u).c)+'">'+esc(roleOf(dLast.u).n)+'</b>：'+esc(String(dLast.x).slice(0,28))+'</span>'
               + (dList.length>1 ? '<span class="tk-mut2">'+dList.length+'</span>' : '')
-              + '<button type="button" class="tk-subadd-inline" data-tk-subadd="'+esc(t.id)+'" title="加一步子任务">＋</button>'
-              + '</div>';
-            s += '<div class="tk-card'+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+(locked?' locked':'')+'" draggable="true" data-tk-card="'+esc(t.id)+'" data-tk-open="'+esc(t.id)+'">'
-              + '<div class="tk-r1"><button type="button" class="tk-stbtn" data-tk-st="'+esc(t.id)+'" title="点一下换列（现在：'+esc(this.stName(t.status))+'）" style="background:'+(TB_ST[t.status]||'#888')+'"></button>'
-              +   '<span class="tk-pri '+this.pri(t)+'">'+this.pri(t)+'</span><span class="tt">'+esc(t.title)+'</span>'
-              +   '<span class="tk-ico">'
-              +     '<button type="button" class="tk-ib" data-gd-disc="devTask" data-id="'+esc(t.id)+'" title="团队讨论">💬'+(nD?'<b>'+nD+'</b>':'')+'</button>'
-              +     '<button type="button" class="tk-ib" data-gd-history="'+esc(t.id)+'" title="历史操作记录">🕘</button>'
-              +     '<button type="button" class="tk-ib" data-gd-edit="devTask" data-id="'+esc(t.id)+'" title="编辑任务">✏️</button>'
-              +   '</span></div>'
-              + '<div class="tk-r2"><span>'+esc(arLab)+'</span>'
-              +   (t.stage?'<i>·</i><span>'+esc(t.stage)+'</span>':'')
-              +   (softs.length?softs.map(x=>'<span class="tk-sw">'+esc(x)+'</span>').join(''):'<span class="tk-dim2">未指定软件</span>')
-              +   (t.path?'<span class="tk-sw" title="'+esc(t.path)+'">UE 路径</span>':'')+'</div>'
-              + '<div class="tk-r3"><button type="button" class="tk-own" data-gd-owner="'+esc(t.id)+'" title="点击更换负责人">'+this.av(t.owner)+'<b>'+esc(this.ownerName(t.owner))+'</b></button>'
-              +   '<span class="tk-sp"></span>'
-              +   (t.dueDate ? this.due(t)+'<span class="tk-mut2">'+esc(String(t.dueDate).slice(5))+'</span>' : '<span class="tk-nodue">未排期</span>')
-              + '</div>'
-              + ((locked||dep||ms||fresh) ? '<div class="tk-r4">'
-                    + (locked?'<span class="tk-lk">🔒 '+esc(this.ownerName(lk.by))+' 正在编辑</span>':'')
-                    + (dep?'<span class="tk-wait2'+(blocked?' blocked':'')+'">⛓ '+esc(dep.title)+'</span>':'')
-                    + (ms?'<span class="tk-tag">🚩 '+esc(ms.title)+'</span>':'')
-                    + (fresh?'<span class="tk-tag">'+(mins<=1?'刚刚更新':mins+' 分钟前更新')+'</span>':'')
-                  + '</div>' : '')
-              + subsRow + replyRow
+              + '</div>' : '';
+
+            s += '<div class="tk-card tk-cd-'+cd+(blocked?' blocked':'')+(this.rsel===t.id?' sel':'')+(locked?' locked':'')+'" draggable="true" data-tk-card="'+esc(t.id)+'" data-tk-open="'+esc(t.id)+'">'
+              + body + replyRow
               + '</div>';
           });
           if(!sub.length) s += '<div class="tk-dim" style="font-size:11px;padding:3px 2px">—</div>';
+          else if(sub.length > 3){
+            s += '<button type="button" class="tk-more" data-tk-more="'+esc(openKey)+'">'+(cellOpen ? '收起' : '还有 '+(sub.length-3)+' 张')+'</button>';
+          }
           s += '</div>';
         });
         s += '</div></div>';
@@ -1596,6 +1645,9 @@ function actions(kind,id,extra) {
         + '<div class="tk-seg">'+V.map(v=>'<button type="button" data-tk-view="'+v[0]+'"'+(this.view===v[0]?' class="on"':'')+'><span>'+v[1]+'</span>'+v[2]+'</button>').join('')+'</div>'
         + '<span class="tk-srch">'+I.get('search')+'<input data-tk-kw placeholder="搜任务…" value="'+esc(this.kw)+'"></span>'
         + '<button type="button" class="tk-btn'+(this.den==='2'?' on':'')+'" data-tk-den title="表格行高">▤ '+(this.den==='2'?'宽松':'紧凑')+'</button>'
+        + '<div class="tk-seg tk-cdseg">'+[['auto','◐','自适应'],['comfy','▤','舒适'],['tight','▥','紧凑'],['row','☰','列表']].map(function(v){
+            return '<button type="button" data-tk-cd="'+v[0]+'"'+(this.cd===v[0]?' class="on"':'')+' title="卡片密度：'+v[2]+'（现在是 '+({auto:'自适应',comfy:'舒适',tight:'紧凑',row:'列表'})[this.cdEff()]+'）">'+v[1]+'</button>';
+          }, this).join('')+'</div>'
         + '<button type="button" class="tk-btn'+(this.rail?' on':'')+'" data-tk-railbtn title="右侧栏">▥ 右栏</button>'
         + '<select class="input" data-tk-member aria-label="筛选成员" style="width:auto">'+optionList(Object.entries(ROLE).map(([id,r])=>[id,r.n]),g._member,'全部成员')+'</select>'
         + '<button type="button" class="tk-btn pri" style="margin-left:auto" data-tk-new>'+I.get('plus')+'新建任务</button>'
@@ -1604,6 +1656,25 @@ function actions(kind,id,extra) {
     /* ---- 事件 ---- */
     bind(box, g, App){
       const self = this;
+      /* v2.14.0 · 卡片密度切换 / 每列展开收起 */
+      box.addEventListener('click', function(e){
+        var cdb = e.target.closest('[data-tk-cd]');
+        if(cdb){
+          e.stopPropagation();
+          self.cd = cdb.dataset.tkCd;
+          try { localStorage.setItem(SYNC_PREFIX+'cden', self.cd); } catch(x) {}
+          render();
+          return;
+        }
+        var mb = e.target.closest('[data-tk-more]');
+        if(mb){
+          e.stopPropagation();
+          var key = mb.dataset.tkMore;
+          if(self.cellOpen[key]) delete self.cellOpen[key]; else self.cellOpen[key] = 1;
+          render();
+          return;
+        }
+      });
       /* v2.13.0 · 今日更新：点条目展开时间线 + 标已读 / 复制摘要 / 摘要卡 / 帮助 */
       box.addEventListener('click', function(e){
         const u = e.target.closest('[data-tk-uid]');
@@ -3307,6 +3378,30 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tk-rrow{display:flex;align-items:center;gap:7px;padding:5px 7px;border-radius:8px;font-size:12px;cursor:pointer;margin-bottom:4px;border:1px solid transparent}
   .tk-rrow:hover{background:var(--card-bg-2)}
   /* v2.13.0 · 今日更新面板 */
+  /* v2.14.0 · 卡片密度与列收纳 */
+  .tk-cdseg button{padding:3px 7px;font-size:11px;line-height:1.6}
+  .tk-ico .hoveronly{display:none}
+  .tk-card:hover .tk-ico .hoveronly{display:inline-flex}
+  @media (hover:none){.tk-ico .hoveronly{display:inline-flex}}
+  .tk-more{width:100%;font-size:10.5px;color:var(--accent);background:none;border:1px dashed var(--card-border);border-radius:7px;padding:3px;cursor:pointer;font-family:inherit}
+  .tk-more:hover{background:var(--card-bg)}
+  .tk-cell{max-height:56vh;overflow-y:auto;overscroll-behavior:contain}
+  .tk-cell .ct{position:sticky;top:0;z-index:2;background:var(--card-bg-2);padding-bottom:3px}
+  .tk-card.tk-cd-tight .tt{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tk-r23{flex-wrap:nowrap;overflow:hidden;gap:5px}
+  .tk-r23m{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .tk-r23m .tk-sw{font-size:9px;padding:0 3px}
+  .tk-cico{font-size:10px;color:var(--muted);flex:0 0 auto}
+  .tk-cbar{display:inline-block;width:20px;height:3px;border-radius:2px;background:var(--card-border);position:relative;overflow:hidden;flex:0 0 auto}
+  .tk-cbar i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:2px}
+  .tk-card.tk-cd-row{display:flex;align-items:center;gap:6px;padding:4px 7px}
+  .tk-card.tk-cd-row .tk-r1{flex:1 1 auto;min-width:0;align-items:center}
+  .tk-card.tk-cd-row .tt{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px}
+  .tk-card.tk-cd-row .tk-ico{display:none}
+  .tk-card.tk-cd-row .tk-rowmeta{display:flex;align-items:center;gap:4px;flex:0 0 auto;font-size:10px;color:var(--muted)}
+  .tk-card.tk-cd-row .tk-rowmeta em{font-style:normal}
+  .tk-card.tk-cd-row .tk-nodue,.tk-card.tk-cd-row .tk-due{font-size:10px}
+  .tk-card.tk-cd-row .tk-reply{display:none}
   .tk-ubadge{font-size:9.5px;padding:0 5px;border-radius:8px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:800;margin-left:5px;vertical-align:1px}
   .tk-ucnt{font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:1px}
   .tk-ucnt b{color:var(--text)}
