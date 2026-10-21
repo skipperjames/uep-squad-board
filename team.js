@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.14.0-20261020'; // v3-18 统一看板：里程碑/BUG/日志/工时/资产 全走任务看板语言（KPI 分派 + 泳道列 + 紧凑卡 + 图标动作）；主要软件新增「AI 制作」｜ v2.7.1 项目详情卡改版：公告独立渐变 footer · 资源去嵌套胶囊 · 删负责人/成员 · 目标→里程碑 ｜ v2.7.1：修右栏永远回不来+连锁拖死筛选 —— TBoard.rail(布尔) 与 rail()渲染方法同名冲突，方法改名 railHtml
+  const VERSION = 'v2.15.0-20261021'; // 移除空的里程碑、工时统计、资产流程模块，保留任务/BUG/日志
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -174,15 +174,14 @@
   const roleOf = id => ROLE[id] || { n: id ? String(id) : '未指派', c: '#888', r: '' };
 
   /* v2.2: shared development records. Preferences/drafts are local only. */
-  const DEV_KEYS = {devProject:'devProjects',devMilestone:'devMilestones',devTask:'devTasks',devBug:'devBugs',devLog:'devLogs',devTime:'devTimes',devAsset:'devAssets'};
+  const DEV_KEYS = {devProject:'devProjects',devTask:'devTasks',devBug:'devBugs',devLog:'devLogs'};
+  const RETIRED_DEV_KEYS = ['devMilestones','devTimes','devAssets'];
   const STAGE_LIST = ['资产制作','UV 拆分','材质制作','UI 制作','美术场景搭建','玩法程序','系统功能','工具脚本','优化调优','联调测试','策划','评审','文档'];
   const DEV_SCHEMA = {
     devProjects:{choices:{status:['active','paused','released','archived']}},
-    devMilestones:{choices:{status:['planned','active','done']}},
     devTasks:{choices:{status:['backlog','doing','review','done'],category:['玩法','程序','美术','技术美术','音频','测试','其他'],priority:['critical','high','mid','low']}},
     devBugs:{choices:{status:['open','fixing','verify','closed'],severity:['critical','high','medium','low']}},
-    devLogs:{choices:{}},devTimes:{choices:{category:['程序','美术','技术美术','设计','调试','学习','其他']}},
-    devAssets:{choices:{type:['模型','材质','动画','特效','HDA','场景','音频','其他']}}
+    devLogs:{choices:{}}
   };
   const clone = x => JSON.parse(JSON.stringify(x));
   const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b);
@@ -200,18 +199,6 @@
   const fields = r => Object.keys(r||{}).filter(k=>!['id','createdAt','updatedAt','_ut','_fields','draft','_restoredAt',...(isTimer(r)?timerFields:[])].includes(k)).flatMap(k=>k==='checks'?Object.keys(r.checks||{}).map(s=>'checks.'+s):[k]).concat(isTimer(r)?['__timeResult']:[]);
   const getField = (r,k) => k==='__timeResult'?(isTimer(r)?Object.fromEntries(timerFields.map(k=>[k,r[k]||0])):undefined):k.startsWith('checks.') ? r?.checks?.[k.slice(7)] : r?.[k];
   function putField(r,k,v) {if(k==='__timeResult'){Object.assign(r,v);return;}if(k.startsWith('checks.'))(r.checks=r.checks||{})[k.slice(7)]=v;else if(v===undefined)delete r[k];else r[k]=clone(v);}
-  function normalizeSessions(state){
-    const rows=state.devTimes||[],primaries=rows.filter(r=>r.sessionId===r.id&&r.sessionStartedAt&&r.sessionEndedAt);
-    for(const primary of primaries){
-      const manual=new Set(rows.filter(r=>r.id.startsWith(primary.id+'@')&&!r.sessionId).map(r=>r.id));
-      state.devTimes=state.devTimes.filter(r=>r.sessionId!==primary.id);let start=primary.sessionStartedAt,index=0;
-      while(start<primary.sessionEndedAt){const day=new Date(start);day.setHours(24,0,0,0);const end=Math.min(+day,primary.sessionEndedAt),id=index++?primary.id+'@'+dstr(start):primary.id;
-        const tomb=state.DELETED?.['devTimes|'+id];if(!manual.has(id)&&(!tomb||(primary._restoredAt||0)>tomb.at))state.devTimes.push({...clone(primary),id,date:dstr(start),startedAt:start,endedAt:end,minutes:(end-start)/60000});start=end;}
-      if(primary.sessionStartedAt===primary.sessionEndedAt)state.devTimes.push(primary);
-    }
-    return state;
-  }
-
   function stamp(r, previous) {
     r._fields = {...r._fields};
     let changed = false;
@@ -263,7 +250,10 @@
     const merged={...remote,...local,DELETED:tombs,_schema:2,_v:VERSION,_ts:Math.max(local._ts||0,remote._ts||0),_by:CONFIG.me};
     sharedKeys.forEach(k=>merged[k]=mergeRecords(local[k],remote[k],BASE?.[k],k,tombs));
     merged.TRASH=mergeList(local.TRASH,remote.TRASH,r=>(r.kind||'DATA')+'|'+r.id+'|'+r.deletedAt).filter(r=>!(merged[r.kind||'DATA']||[]).some(x=>x.id===r.id&&(x._restoredAt||0)>r.deletedAt));
-    merged.devTasks.forEach(t=>{['dependsOn','milestoneId'].forEach(k=>{const kind=k==='dependsOn'?'devTasks':'devMilestones',tomb=tombs[kind+'|'+t[k]];if(t[k]&&tomb&&!merged[kind].some(r=>r.id===t[k])){t._fields={...t._fields,[k]:{t:tomb.at,by:tomb.by}};t[k]='';}});});
+    merged.devTasks.forEach(t=>{if(Object.hasOwn(t,'milestoneId')){delete t.milestoneId;if(t._fields)delete t._fields.milestoneId;}const k='dependsOn',kind='devTasks',tomb=tombs[kind+'|'+t[k]];if(t[k]&&tomb&&!merged[kind].some(r=>r.id===t[k])){t._fields={...t._fields,[k]:{t:tomb.at,by:tomb.by}};t[k]='';}});
+    RETIRED_DEV_KEYS.forEach(k=>delete merged[k]);
+    merged.TRASH=(merged.TRASH||[]).filter(r=>!RETIRED_DEV_KEYS.includes(r.kind));
+    merged.DELETED=Object.fromEntries(Object.entries(merged.DELETED||{}).filter(([k])=>!RETIRED_DEV_KEYS.some(x=>k.startsWith(x+'|'))));
     merged.LOG=mergeList(local.LOG,remote.LOG,r=>r.t+'|'+r.by+'|'+r.act+'|'+r.cardId).slice(0,200);
     merged.DISCUSS=mergeDiscuss(local.DISCUSS,remote.DISCUSS);
     merged.COLUMNS=(remote.COLUMNS?.length>=2)?remote.COLUMNS:local.COLUMNS;
@@ -284,7 +274,6 @@
   }
   function devRows(kind,projectId) {const k=DEV_KEYS[kind];if(!k)throw Error('未知记录类型');return DEV[k].filter(r=>!projectId||r.projectId===projectId);}
   function validateTask(r,rows=DEV.devTasks) {
-    if(r.milestoneId&&!DEV.devMilestones.some(m=>m.id===r.milestoneId&&m.projectId===r.projectId))throw Error('请选择同项目的里程碑');
     const dep=rows.find(t=>t.id===r.dependsOn);
     if(r.dependsOn&&(!dep||dep.projectId!==r.projectId))throw Error('请选择同项目的前置任务');
     const seen=new Set([r.id]);let cur=dep;
@@ -301,16 +290,16 @@
     // 新任务表单只提交分区；补齐旧 schema 所需的工作分类，不覆盖已有分类。
     if(kind==='devTask'&&(r.category==null||r.category===''))r.category=r.area==='art'?'美术':r.area==='prog'?'程序':'其他';
     Object.entries(DEV_SCHEMA[key].choices).forEach(([k,opts])=>{if(!opts.includes(r[k]))throw Error('请选择有效的 '+fieldLabel(k));});
-    if((kind==='devProject'||kind==='devAsset')?!String(r.name||'').trim():['devTask','devBug','devMilestone'].includes(kind)&&!String(r.title||'').trim())throw Error('请填写名称');
+    if(kind==='devProject'?!String(r.name||'').trim():['devTask','devBug'].includes(kind)&&!String(r.title||'').trim())throw Error('\u8bf7\u586b\u5199\u540d\u79f0');
     if(kind==='devLog'&&!r.done&&!r.blockers&&!r.next)throw Error('至少填写一项进展、阻碍或下一步');
     ['date','dueDate','targetDate'].forEach(k=>{if(r[k]&&!/^\d{4}-\d{2}-\d{2}$/.test(r[k]))throw Error('日期格式无效');});
-    if(['devLog','devTime'].includes(kind)&&!r.date)throw Error('请填写日期');
+    if(kind==='devLog'&&!r.date)throw Error('\u8bf7\u586b\u5199\u65e5\u671f');
     if(kind==='devTask')validateTask(r);
-    if(kind==='devTime'&&(!Number.isFinite(r.minutes)||r.minutes<0||r.minutes>1440||(!r.startedAt&&r.minutes<.1)))throw Error('手动工时应在 0.1–1440 分钟之间');
     if(kind==='devBug'&&((r.images||[]).length>2||(r.images||[]).some(x=>!validAttachment(x))))throw Error('截图附件格式无效');
     const before=clone(collectLocal());
+    if(kind==='devTask'&&Object.hasOwn(r,'milestoneId')){delete r.milestoneId;if(r._fields)delete r._fields.milestoneId;}
     r.owner=r.owner||CONFIG.me;r.recorder=old?.recorder||CONFIG.me;r.checks=r.checks||{};
-    stamp(r,old);DEV[key]=old?DEV[key].map(x=>x.id===id?r:x):[...DEV[key],r];
+    stamp(r,old);if(kind==='devTask'&&r._fields)delete r._fields.milestoneId;DEV[key]=old?DEV[key].map(x=>x.id===id?r:x):[...DEV[key],r];
     // v2.4.1：历史细节带「更新了哪些字段」（lockedBy 是锁标记，不算内容更新）
     const changed=old?Object.keys(patch||{}).filter(k=>k!=='lockedBy'&&!equal((old||{})[k],r[k])):[];
     log(old?'edit':'create',r.id,(kind==='devProject'?'项目':'开发记录')+' · '+(r.name||r.title||r.date)+(old&&changed.length?'（更新 '+changed.map(k=>fieldLabel(k)).join('、')+'）':''));
@@ -650,7 +639,7 @@
     const before=clone(collectLocal()),at=tick();
     DELETED[key+'|'+id]={at,by:CONFIG.me};TRASH.unshift({...clone(r),kind:key,deletedAt:at,deletedBy:CONFIG.me});
     DEV[key]=DEV[key].filter(x=>x.id!==id);
-    if(kind==='devMilestone'||kind==='devTask')DEV.devTasks.forEach(t=>{const k=kind==='devTask'?'dependsOn':'milestoneId';if(t[k]===id){const prev=clone(t);t[k]='';stamp(t,prev);}});
+    if(kind==='devTask')DEV.devTasks.forEach(t=>{if(t.dependsOn===id){const prev=clone(t);t.dependsOn='';stamp(t,prev);}});
     log('delete',id,'删除开发记录');
     try {save();}catch(e){applyState(before);throw e;}
   }
@@ -659,25 +648,11 @@
     const before=clone(collectLocal()),r=clone(TRASH[at]);
     delete r.kind;delete r.deletedAt;delete r.deletedBy;
     r._restoredAt=Math.max(tick(),(DELETED[kind+'|'+id]?.at||0)+1);r.updatedAt=r._ut=r._restoredAt;
-    if(kind==='devTasks'){if(!DEV.devTasks.some(x=>x.id===r.dependsOn))r.dependsOn='';if(!DEV.devMilestones.some(x=>x.id===r.milestoneId))r.milestoneId='';validateTask(r);}
+    if(kind==='devTasks'){if(!DEV.devTasks.some(x=>x.id===r.dependsOn))r.dependsOn='';validateTask(r);}
     DEV[kind].push(r);TRASH.splice(at,1);log('restore',id,'恢复开发记录');
     try {save();}catch(e){applyState(before);throw e;}
   }
-  function startTime(projectId,category,note) {
-    if(DEV.devTimes.some(r=>r.owner===CONFIG.me&&r.startedAt&&!r.endedAt))throw Error('你已有计时，请先停止；其他成员可以各自计时');
-    return devSave('devTime',{projectId,category,note,owner:CONFIG.me,date:dstr(now()),startedAt:now(),endedAt:0,minutes:0});
-  }
-  function stopTime(id,end=now()) {
-    const r=DEV.devTimes.find(r=>r.id===id);if(!r||!r.startedAt||r.endedAt)throw Error('计时已停止或被删除，请刷新查看');
-    if(end<r.startedAt)throw Error('系统时间早于开始时间');
-    const before=clone(collectLocal());let start=r.startedAt,index=0;const segments=[];
-    while(start<end){const d=new Date(start);d.setHours(24,0,0,0);const finish=Math.min(+d,end);segments.push({...clone(r),id:index++?id+'@'+dstr(start):id,date:dstr(start),startedAt:start,endedAt:finish,minutes:(finish-start)/60000,sessionId:id,sessionStartedAt:r.startedAt,sessionEndedAt:end});start=finish;}
-    if(!segments.length)segments.push({...clone(r),endedAt:end,minutes:0,sessionId:id,sessionStartedAt:r.startedAt,sessionEndedAt:end});
-    DEV.devTimes=DEV.devTimes.filter(x=>x.id!==id).concat(segments.map(s=>stamp(s,s.id===id?r:null)));log('edit',id,'停止计时 · 按天保存');
-    try{save();}catch(e){applyState(before);throw e;}
-    return segments;
-  }
-  const DevData={KEYS:DEV_KEYS,DEV_SCHEMA,devAll:devRows,devSave,devRemove,devStartTime:startTime,devStopTime:stopTime,today:()=>dstr(now()),shift:(s,n)=>{const d=new Date(s+'T12:00:00');d.setDate(d.getDate()+n);return dstr(+d);},weekCn:s=>'日一二三四五六'[new Date(s+'T12:00:00').getDay()],devTimeSummary:(p,a,b,member)=>({minutes:DEV.devTimes.filter(r=>r.projectId===p&&(!r.startedAt||r.endedAt)&&r.date>=a&&r.date<=b&&(!member||r.owner===member)).reduce((n,r)=>n+r.minutes,0)})};
+  const DevData={KEYS:DEV_KEYS,DEV_SCHEMA,devAll:devRows,devSave,devRemove,today:()=>dstr(now()),shift:(s,n)=>{const d=new Date(s+'T12:00:00');d.setDate(d.getDate()+n);return dstr(+d);},weekCn:s=>'\u65e5\u4e00\u4e8c\u4e09\u56db\u4e94\u516d'[new Date(s+'T12:00:00').getDay()]};
   function saveDrafts(){localStorage.setItem(SYNC_PREFIX+'drafts',JSON.stringify(localDrafts));}
   function validAttachment(x){return x&&typeof x.path==='string'&&/^attachments\/[a-zA-Z0-9@._-]+\.(png|jpg|webp|gif)$/.test(x.path)&&/^image\/(png|jpeg|webp|gif)$/.test(x.type)&&x.size<=1024*1024;}
   const imageCache=new Map(),imageMemory=new Map();
@@ -727,24 +702,15 @@ const App=DevModal;
 const SOFTS = ['Houdini','UE','Blender','AI 制作'];
 const SOFT_ABBR = {Houdini:'H',UE:'U',Blender:'B','AI 制作':'AI'};
 const TABS = [
-  ['devMilestone','里程碑','target'],['devTask','任务看板','grid'],['devBug','BUG 追踪','shield'],
-  ['devLog','开发日志','edit'],['devTime','工时统计','clock'],['devAsset','资产流程','inbox']
+  ['devTask','\u4efb\u52a1\u770b\u677f','grid'],['devBug','BUG \u8ffd\u8e2a','shield'],['devLog','\u5f00\u53d1\u65e5\u5fd7','edit']
 ];
 const LABELS = {
   active:'进行中',paused:'暂停',released:'已发布',archived:'已归档',planned:'未开始',done:'已完成',
   backlog:'待开发',doing:'开发中',review:'待验收',open:'待处理',fixing:'修复中',verify:'待验证',closed:'已关闭',
   high:'高',mid:'中',low:'低',critical:'阻断',medium:'一般'
 };
-const STAGES = {design:'设计确认',build:'制作完成',uv:'UV 完成',material:'材质完成',collision:'碰撞完成',lod:'LOD 完成',engine:'UE 入库'};
-const STAGE_ABBR = {design:'设',build:'制',uv:'UV',material:'材',collision:'碰',lod:'LOD',engine:'UE'};
-const WORKFLOWS = {
-  '模型':['design','build','uv','material','collision','lod','engine'],
-  '场景':['design','build','material','collision','engine'],
-  '材质':['design','build','engine'],'动画':['design','build','engine'],'特效':['design','build','engine'],
-  'HDA':['design','build','engine'],'音频':['design','build','engine'],'其他':['design','build','engine']
-};
-const NEW_LABELS = {devMilestone:'新建里程碑',devTask:'新建任务',devBug:'记录 BUG',devLog:'写开发日志',devTime:'补录工时',devAsset:'新建资产'};
-const EDIT_LABELS = {devMilestone:'编辑里程碑',devTask:'编辑任务',devBug:'编辑 BUG',devLog:'编辑开发日志',devTime:'编辑工时',devAsset:'编辑资产'};
+const NEW_LABELS = {devTask:'\u65b0\u5efa\u4efb\u52a1',devBug:'\u8bb0\u5f55 BUG',devLog:'\u5199\u5f00\u53d1\u65e5\u5fd7'};
+const EDIT_LABELS = {devTask:'\u7f16\u8f91\u4efb\u52a1',devBug:'\u7f16\u8f91 BUG',devLog:'\u7f16\u8f91\u5f00\u53d1\u65e5\u5fd7'};
 function optionList(values,value,empty) {
   return (empty?'<option value="">'+esc(empty)+'</option>':'')+values.map(function(v){
     const pair=Array.isArray(v)?v:[v,LABELS[v] || v];
@@ -772,11 +738,6 @@ function chipGroup(name,label,opts,selected,multi) {
     +'<input type="hidden" name="'+esc(name)+'" value="'+esc(multi?(cur||[]).join(','):(selected==null?'':selected))+'">'
     +'</div></div>';
 }
-function hours(minutes) {return minutes>0&&minutes<.6?'不足 1 分钟':(minutes/60).toLocaleString('zh-CN',{maximumFractionDigits:2})+' h';}
-function clock(ms) {
-  const sec=Math.max(0,Math.floor(ms/1000));
-  return [Math.floor(sec/3600),Math.floor(sec/60)%60,sec%60].map(function(n){return String(n).padStart(2,'0');}).join(':');
-}
 function badge(value) {return '<span class="gd-badge gd-badge--'+esc(value)+'">'+esc(LABELS[value] || value)+'</span>';}
 function dateHint(date,done) {
   if(!date)return '';
@@ -795,12 +756,6 @@ function dueChip(date,done) {
 function details(label,text) {
   return text?'<div class="gd-detail"><span>'+esc(label)+'</span><p>'+esc(text)+'</p></div>':'';
 }
-function assetProgress(r) {
-  const stages=WORKFLOWS[r.type] || WORKFLOWS['其他'];
-  const ck=r.checks||{};
-  const count=stages.filter(function(k){return !!ck[k];}).length;
-  return {stages:stages,count:count,total:stages.length,percent:Math.round(count/stages.length*100)};
-}
 function actions(kind,id,extra) {
   return '<div class="gd-actions">'+(extra || '')+'<button class="btn btn-sm" data-gd-disc="'+kind+'" data-id="'+esc(id)+'">讨论</button><button class="btn btn-sm" data-gd-history="'+esc(id)+'">历史</button><span class="gd-meta">'+esc(roleOf(D.devAll(kind).find(r=>r.id===id)?.owner).n)+' · 记录人 '+esc(roleOf(D.devAll(kind).find(r=>r.id===id)?.recorder).n)+'</span><button class="btn btn-sm" data-gd-edit="'+kind+'" data-id="'+esc(id)+'">编辑</button><button class="btn btn-ghost btn-sm" data-gd-delete="'+kind+'" data-id="'+esc(id)+'">删除</button></div>';
 }
@@ -808,7 +763,7 @@ function actions(kind,id,extra) {
   /* ============================================================
      UB（v3-18）—— 统一看板层
      ------------------------------------------------------------
-     里程碑 / BUG 追踪 / 开发日志 / 工时统计 / 资产流程 这 5 个面板，
+     BUG 追踪 / 开发日志两个辅助面板，
      统一成「任务看板」的同一套语言：
        · 同一个 KPI 条（.tk-kpibar，按面板换指标）
        · 同一个泳道 + 状态列（.tk-lane / .tk-cell，可四列可三列）
@@ -977,7 +932,7 @@ function actions(kind,id,extra) {
     dupTask(id, g) {
       const t = D.devAll('devTask').filter(function (x) { return x.id === id; })[0];
       if (!t) return;
-      const KEEP = ['projectId', 'title', 'description', 'acceptance', 'note', 'status', 'priority', 'area', 'stage', 'soft', 'owner', 'dueDate', 'path', 'milestoneId', 'dependsOn'];
+      const KEEP = ['projectId', 'title', 'description', 'acceptance', 'note', 'status', 'priority', 'area', 'stage', 'soft', 'owner', 'dueDate', 'path', 'dependsOn'];
       const p = {};
       KEEP.forEach(function (k) { if (t[k] !== undefined && t[k] !== null && t[k] !== '') p[k] = t[k]; });
       p.title = String(t.title || '').slice(0, 190) + '（副本）';
@@ -1034,19 +989,7 @@ function actions(kind,id,extra) {
        这里按 tab 分派，但仍然是同一个 .tk-kpibar 外壳，观感与任务看板一致。 */
     kpiFor(tab, o) {
       o = o || {};
-      const tasks = o.tasks || [], bugs = o.bugs || [], assets = o.assets || [], list = o.list || [], pid = o.projectId || '';
-      if (tab === 'devMilestone') {
-        const done = list.filter(r => r.status === 'done').length;
-        const live = list.filter(r => r.status !== 'done');
-        const over = live.filter(r => r.dueDate && this.daysTo(r.dueDate) < 0).length;
-        const linked = tasks.filter(t => t.milestoneId), linkedDone = linked.filter(t => t.status === 'done').length;
-        return UB.kpi([
-          [list.length, '里程碑'],
-          [live.filter(r => r.status === 'active').length, '进行中'],
-          [over, overWord(), (over && toneMode()!=='soft') ? 'hot' : ''],
-          [linkedDone + ' / ' + linked.length, '关联任务']
-        ], { pct: list.length ? Math.round(done / list.length * 100) : 0, pctLabel: '完成（' + done + '/' + list.length + '）' });
-      }
+      const tasks = o.tasks || [], bugs = o.bugs || [], list = o.list || [];
       if (tab === 'devBug') {
         const live = list.filter(r => r.status !== 'closed');
         const block = live.filter(r => r.severity === 'critical').length;
@@ -1069,42 +1012,17 @@ function actions(kind,id,extra) {
           [last ? String(last.date).slice(5) : '—', '最近一篇']
         ], { pct: Math.round(Object.keys(days).length / 7 * 100), pctLabel: '七天覆盖' });
       }
-      if (tab === 'devTime') {
-        const times = o.times || [];
-        const saved = times.filter(r => r.minutes != null);
-        const total = saved.reduce((n, r) => n + r.minutes, 0);
-        const tMin = D.devTimeSummary(pid, D.today(), D.today()).minutes;
-        const wMin = D.devTimeSummary(pid, D.shift(D.today(), -6), D.today()).minutes;
-        return UB.kpi([
-          [hours(tMin), '今天'],
-          [hours(wMin), '近 7 天'],
-          [hours(total), '本项目累计'],
-          [saved.length, '已保存段']
-        ]);
-      }
-      if (tab === 'devAsset') {
-        const ready = list.filter(r => assetProgress(r).percent === 100);
-        const ing = list.filter(r => { const p = assetProgress(r); return p.percent > 0 && p.percent < 100; });
-        return UB.kpi([
-          [list.length, '资产'],
-          [ready.length, '已就绪'],
-          [ing.length, '制作中'],
-          [list.length - ready.length - ing.length, '未开始']
-        ], { pct: list.length ? Math.round(ready.length / list.length * 100) : 0, pctLabel: '就绪率' });
-      }
       /* 任务看板：沿用原来的任务 KPI（5 个数 + 总进度 + 成员负载） */
       return this.kpi(tasks, bugs);
     },
     /* ---- 项目详情条（可展开；原来 resourcePanel 的内容整块搬进来） ---- */
     proj(g, p, tasks){
       if(!p) return '';
-      const ms = D.devAll('devMilestone', p.id) || [];
       const done = tasks.filter(t=>t.status==='done').length;
       const pct = tasks.length ? Math.round(done/tasks.length*100) : 0;
       const live = tasks.filter(t=>t.status!=='done');
       let sum = esc(p.name) + ' · ' + esc(p.engine || '未设置工具')
         + ' · 任务 ' + done + '/' + tasks.length;
-      if(ms.length) sum += ' · 里程碑 ' + ms.length + ' 个';
       let s = '<div class="tk-proj"><div class="tk-proj-hd" data-tk-proj>'
         + '<b>📁 项目详情</b><span class="sum">'+sum+'</span>'
         + '<span class="tri">'+(this.projOpen?'收起 ▴':'展开 ▾')+'</span></div>';
@@ -1113,13 +1031,6 @@ function actions(kind,id,extra) {
           + '<div class="tk-pf"><i>项目</i><b>'+esc(p.name)+'</b></div>'
           + '<div class="tk-pf"><i>状态</i><b>'+esc(LABELS[p.status] || p.status || '—')+'</b></div>'
           + '<div class="tk-pf"><i>工具</i><b>'+esc(p.engine || '—')+'</b></div>'
-          + '<div class="tk-pf"><i>里程碑</i><b>'+(function(){
-            const mCur = ms.filter(m=>m.status!=='done')[0] || ms[ms.length-1];
-            if(!mCur) return '—';
-            const dd = mCur.dueDate ? ' · ' + esc(String(mCur.dueDate).slice(5)) : '';
-            const tail = ms.length > 1 ? '<span style="color:var(--muted);font-weight:500">（共 ' + ms.length + ' 个）</span>' : '';
-            return '🚩 ' + esc(mCur.title || '未命名') + dd + tail;
-          })()+'</b></div>'
           + '<div class="tk-pf" style="grid-column:1/-1"><i>任务分布</i><b>'
             + this.stOrder().map(s2=>this.stName(s2)+' '+tasks.filter(t=>t.status===s2).length).join(' · ')
             + ' · '+overWord()+' '+live.filter(t=>t.dueDate && this.daysTo(t.dueDate)<0).length
@@ -1172,7 +1083,6 @@ function actions(kind,id,extra) {
             const lk = t.lockedBy;
             const locked = !!(lk && lk.by && lk.by!==CONFIG.me && (now()-(lk.at||0)) < 15*60000);
             const nD = (DISCUSS[t.id]||[]).length;
-            const ms = t.milestoneId ? (D.devAll('devMilestone')||[]).filter(m=>m.id===t.milestoneId)[0] : null;
             const subsA = Array.isArray(t.subtasks) ? t.subtasks : [];
             const subDone = subsA.filter(function (x) { return x.done; }).length;
             const dList = DISCUSS[t.id] || [];
@@ -1216,10 +1126,9 @@ function actions(kind,id,extra) {
               body = '<div class="tk-r1">'+head+ico+'</div>'
                 + (r2.length ? '<div class="tk-r2">'+r2.join('<i>·</i>')+'</div>' : '')
                 + '<div class="tk-r3">'+ownBtn+'<span class="tk-sp"></span>'+dueHtml+'</div>'
-                + ((locked||dep||ms||fresh) ? '<div class="tk-r4">'
+                + ((locked||dep||fresh) ? '<div class="tk-r4">'
                       + (locked?'<span class="tk-lk">🔒 '+esc(this.ownerName(lk.by))+' 正在编辑</span>':'')
                       + (dep?'<span class="tk-wait2'+(blocked?' blocked':'')+'">⛓ '+esc(dep.title)+'</span>':'')
-                      + (ms?'<span class="tk-tag">🚩 '+esc(ms.title)+'</span>':'')
                       + (fresh?'<span class="tk-tag">'+(mins<=1?'刚刚更新':mins+' 分钟前更新')+'</span>':'')
                     + '</div>' : '')
                 + (subsA.length ? '<div class="tk-subs">'
@@ -1354,7 +1263,6 @@ function actions(kind,id,extra) {
         const ds = DISCUSS[t.id] || [];
         const st = this.stOrder(), nx = st[Math.min(st.length-1, st.indexOf(t.status)+1)];
         const dep = t.dependsOn ? this.find(all, t.dependsOn) : null;
-        const ms = t.milestoneId ? (D.devAll('devMilestone')||[]).filter(m=>m.id===t.milestoneId)[0] : null;
         let s = '<h3>✎ 任务详情 <span class="bx" data-tk-rail="today">← 返回今日</span></h3><div class="tk-det">'
           + '<h4>'+esc(t.title)+'</h4>'
           + '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:5px">'
@@ -1365,7 +1273,6 @@ function actions(kind,id,extra) {
           +   '<i>阶段</i><span>'+esc(t.stage || '未分区')+'</span>'
           +   '<i>主要软件</i><span>'+esc(t.soft || '—')+'</span>'
           +   '<i>交付日</i><span>'+esc(t.dueDate || '未排期')+'</span>'
-          +   (ms?'<i>里程碑</i><span>'+esc(ms.title)+'</span>':'')
           +   (dep?'<i>前置</i><span style="color:'+(dep.status==='done'?'#10b981':'#f5a524')+'">'+esc(dep.title)+'（'+(dep.status==='done'?'已完成':'未完成')+'）</span>':'')
           +   (t.path?'<i>UE 路径</i><span style="word-break:break-all"><code>'+esc(t.path)+'</code></span>':'')
           + '</div>';
@@ -1374,12 +1281,11 @@ function actions(kind,id,extra) {
         if(p){
           const ptasks = D.devAll('devTask', p.id) || [];
           const pdone = ptasks.filter(x=>x.status==='done').length;
-          const pms = (D.devAll('devMilestone', p.id)||[]);
           s += '<div class="tk-rsec">所属项目</div><div class="tk-projmini">'
             + '<div class="pn">'+esc(p.name)+'<span style="font-size:10px;padding:0 5px;border-radius:4px;border:1px solid var(--card-border);color:var(--muted)">'+esc(p.engine||'—')+'</span></div>'
             + '<div class="pm">状态 '+esc(LABELS[p.status]||p.status||'—')+(p.targetDate?' · 目标 '+esc(p.targetDate):'')+'</div>'
             + '<div class="pm">负责人 '+esc(this.ownerName(CONFIG.me))+' · 成员 '+Object.keys(ROLE).map(k=>esc(ROLE[k].n)).join(' / ')+'</div>'
-            + '<div class="pm">任务 '+pdone+'/'+ptasks.length+' 完成'+(pms.length?' · 里程碑 '+pms.length+' 个':'')+'</div>'
+             + '<div class="pm">\u4efb\u52a1 '+pdone+'/'+ptasks.length+' \u5b8c\u6210</div>'
             + '</div>';
         }
         s += '<div class="tk-rsec">讨论 '+ds.length+'</div>';
@@ -1487,7 +1393,7 @@ function actions(kind,id,extra) {
     uFieldCn(k){
       var FL = { title:'标题', status:'状态', owner:'负责人', priority:'优先级', dueDate:'交期',
                  subtasks:'子任务', stage:'阶段', soft:'主要软件', path:'UE 路径', dependsOn:'前置',
-                 milestoneId:'里程碑', area:'分区', category:'分类', description:'说明' };
+                 area:'分区', category:'分类', description:'说明' };
       if (FL[k]) return FL[k];
       var v = (typeof fieldLabel === 'function') ? fieldLabel(k) : '';
       return (v && v !== k) ? v : k;
@@ -1915,7 +1821,7 @@ function actions(kind,id,extra) {
   };
 
 const GameDev = {
-  key:'gamedev',title:'游戏开发',icon:'gamepad',_tab:'devMilestone',_project:'',_query:'',_filter:'',_area:'',_stage:'',_soft:'',_box:null,_clock:null,_member:'',
+  key:'gamedev',title:'游戏开发',icon:'gamepad',_tab:'devTask',_project:'',_query:'',_filter:'',_area:'',_stage:'',_soft:'',_box:null,_clock:null,_member:'',
   repaint(){render();return Promise.resolve();},
   project:function() {
     const projects=D.devAll('devProject');
@@ -1927,10 +1833,7 @@ const GameDev = {
     const p=this.project(),id=p?p.id:'',tab=this._tab;
     const projects=D.devAll('devProject');
     const all=function(kind){return id?D.devAll(kind,id):[];};
-    const tasks=all('devTask'),bugs=all('devBug'),assets=all('devAsset');
-    const running=D.devAll('devTime').filter(r=>r.startedAt&&!r.endedAt);
-    const timerNotice=tab!=='devTime'&&running.length?'<div class="gd-running-notice"><span>工作计时正在进行'+(running.length>1?'（'+running.length+' 段）':'')+' · <strong data-gd-clock="'+running[0].startedAt+'">'+clock(Date.now()-running[0].startedAt)+'</strong></span><button class="btn btn-sm" data-gd-tab="devTime">查看计时</button></div>':'';
-    const summary=id?D.devTimeSummary(id,D.shift(D.today(),-6),D.today()):{minutes:0};
+    const tasks=all('devTask'),bugs=all('devBug');
     // v2.3.3：表头一比一对齐目标设计 —— 口号区砍掉，左=项目元信息（名/状态/引擎·日期），右=紧凑操作组
     const title='<div class="gd-heading">'
       + '<div class="gd-proj-meta">'+(p?'<h3>'+esc(p.name)+'</h3>'+badge(p.status)+'<span class="gd-proj-line">'+esc(p.engine || '未设置工具')+(p.targetDate?' · '+esc(p.targetDate):'')+'</span>':'<span class="gd-noproj">未选择项目</span>')+'</div>'
@@ -1939,23 +1842,20 @@ const GameDev = {
       + '<button class="btn btn-primary btn-sm" data-gd-new-project>'+I.get('plus')+'新建项目</button></div>'
       + '</div>';
     const picker='';
-    const kpiItems=[['任务总数',tasks.length],['进行中',tasks.filter(r=>r.status==='doing').length],['待验收',tasks.filter(r=>r.status==='review').length],['待开发',tasks.filter(r=>r.status==='backlog').length],['未关闭 BUG',bugs.filter(r=>r.status!=='closed').length],['近 7 天工时',hours(summary.minutes)],['资产就绪',assets.filter(r=>assetProgress(r).percent===100).length+' / '+assets.length]];
-    const kpibar='<div class="tk-kpibar">'+TBoard.kpiFor(tab,{tasks:tasks,bugs:bugs,assets:assets,list:all(tab),times:all('devTime'),projectId:id})+'</div>';
+    const kpiItems=[['\u4efb\u52a1\u603b\u6570',tasks.length],['\u8fdb\u884c\u4e2d',tasks.filter(r=>r.status==='doing').length],['\u5f85\u9a8c\u6536',tasks.filter(r=>r.status==='review').length],['\u5f85\u5f00\u53d1',tasks.filter(r=>r.status==='backlog').length],['\u672a\u5173\u95ed BUG',bugs.filter(r=>r.status!=='closed').length]];
+    const kpibar='<div class="tk-kpibar">'+TBoard.kpiFor(tab,{tasks:tasks,bugs:bugs,list:all(tab),projectId:id})+'</div>';
     const tkProj=TBoard.proj(this,p,tasks);
     const info=p?'<section class="gd-project-card">'+(p.description?'<p class="gd-project-desc">'+esc(p.description)+'</p>':'')+this.resourcePanel(p)+noticeBar(p)+'</section>':'';
     const tabs='<div class="gd-tabs" role="tablist" aria-label="开发功能">'+TABS.map(function(t){return '<button role="tab" tabindex="'+(tab===t[0]?'0':'-1')+'" aria-selected="'+(tab===t[0])+'" class="gd-tab'+(tab===t[0]?' on':'')+'" data-gd-tab="'+t[0]+'">'+I.get(t[2])+'<span>'+t[1]+'</span><small>'+all(t[0]).length+'</small></button>';}).join('')+'</div>';
-    if(!p)return title+picker+tabs+'<div class="gd-empty gd-welcome"><span class="gd-empty-icon">'+I.get('gamepad')+'</span><h3>先给你的作品建一个项目</h3><p>填写名称和目标，就能开始拆分里程碑、安排任务和记录开发。</p><button class="btn btn-primary" data-gd-new-project>创建第一个项目</button></div>';
+    if(!p)return title+picker+tabs+'<div class="gd-empty gd-welcome"><span class="gd-empty-icon">'+I.get('gamepad')+'</span><h3>先给你的作品建一个项目</h3><p>填写名称和目标，就能开始安排任务、记录 BUG 和沉淀开发日志。</p><button class="btn btn-primary" data-gd-new-project>创建第一个项目</button></div>';
     const toolbar='<div class="gd-toolbar"><div class="gd-search"><span>'+I.get('search')+'</span><input id="gd-search" class="input" aria-label="搜索当前功能" placeholder="搜索'+TABS.find(t=>t[0]===tab)[1]+'…" value="'+esc(this._query)+'"></div>'+this.filterSelect()+'<select id="gd-member" class="input" aria-label="筛选成员">'+optionList(Object.entries(ROLE).map(([id,r])=>[id,r.n]),this._member,'全部成员')+'</select><button class="btn btn-primary" data-gd-new="'+tab+'">'+I.get('plus')+NEW_LABELS[tab]+'</button></div>';
     const rows=all(tab).filter(r=>this.matches(r));
     let body='';
-    if(tab==='devMilestone')body=this.milestones(rows,tasks);
     if(tab==='devTask')body=TBoard.html(this, TBoard.stack(tasks,id,this._member), tasks, p);
     if(tab==='devBug')body=this.bugs(rows);
     if(tab==='devLog')body=this.logs(rows);
-    if(tab==='devTime')body=this.times(rows,id);
-    if(tab==='devAsset')body=this.assets(rows);
     const isTB=(tab==='devTask');
-    return title+picker+(isTB?tkProj:info)+kpibar+timerNotice+tabs+(isTB?'':this.filterBar(tab,tasks))+(isTB?'':toolbar)+'<section class="gd-content" role="tabpanel" aria-label="'+TABS.find(t=>t[0]===tab)[1]+'">'+body+'</section>';
+    return title+picker+(isTB?tkProj:info)+kpibar+tabs+(isTB?'':this.filterBar(tab,tasks))+(isTB?'':toolbar)+'<section class="gd-content" role="tabpanel" aria-label="'+TABS.find(t=>t[0]===tab)[1]+'">'+body+'</section>';
   },
   filterBar:function(tab,tasks) {
     if(tab!=='devTask')return '';
@@ -1978,10 +1878,7 @@ const GameDev = {
       +'<div class="gd-rail">'+rail+'</div>';
   },
   filterSelect:function() {
-    let choices=[];
-    if(this._tab==='devAsset')choices=[['pending','制作中'],['ready','已就绪']];
-    else if(this._tab==='devTime')choices=[['today','今天'],['week','近 7 天'],['month','本月']];
-    else choices=(D.DEV_SCHEMA[D.KEYS[this._tab]].choices.status || []).map(v=>[v,LABELS[v]]);
+    const choices=(D.DEV_SCHEMA[D.KEYS[this._tab]].choices.status || []).map(v=>[v,LABELS[v]]);
     return choices.length?'<select id="gd-filter" class="input" aria-label="筛选记录" data-no-draft>'+optionList(choices,this._filter,'全部')+'</select>':'';
   },
   matches:function(r) {
@@ -1994,40 +1891,9 @@ const GameDev = {
     if(this._query&&Object.keys(r).filter(k=>typeof r[k]==='string').map(k=>r[k]).join(' ').toLowerCase().indexOf(this._query.toLowerCase())<0)return false;
     const f=this._filter;
     if(!f)return true;
-    if(this._tab==='devAsset')return (assetProgress(r).percent===100)===(f==='ready');
-    if(this._tab==='devTime')return r.date<=D.today()&&r.date>=(f==='today'?D.today():f==='week'?D.shift(D.today(),-6):D.today().slice(0,7)+'-01');
     return r.status===f;
   },
   empty:function(text) {return '<div class="gd-empty"><h3>'+esc(text || '这里还没有记录')+'</h3><p>'+(this._query||this._filter?'可以调整搜索或筛选条件。':'点击右上方按钮，开始记录这个项目。')+'</p></div>';},
-  milestones:function(rows,tasks) {
-    if(!rows.length)return this.empty('把目标拆成可交付的里程碑');
-    const COLS=[['planned','未开始'],['active','进行中'],['done','已完成']];
-    const PILL={planned:'P3',active:'P2',done:'P1'};
-    const list=rows.slice().sort((a,b)=>String(a.dueDate||'9999').localeCompare(String(b.dueDate||'9999')));
-    const card=function(r){
-      const linked=tasks.filter(t=>t.milestoneId===r.id);
-      const done=linked.filter(t=>t.status==='done').length;
-      const pct=linked.length?Math.round(done/linked.length*100):(r.status==='done'?100:0);
-      const nD=(DISCUSS[r.id]||[]).length;
-      const acc=String(r.acceptance||'');
-      return '<div class="tk-card" data-gd-open="devMilestone" data-id="'+esc(r.id)+'">'
-        + UB.head(r.status==='done'?'tb-ok':(PILL[r.status]||'P3'),LABELS[r.status]||r.status,r.title,'devMilestone',r.id,nD)
-        + (r.description?'<div class="tb-desc">'+esc(r.description)+'</div>':'')
-        + '<div class="tb-pg">'+TBoard.bar(pct,r.status==='done'?'#10b981':'var(--accent)')+'<span class="tb-pct">'+pct+'%</span></div>'
-        + '<div class="tk-r3"><span class="tb-k">关联任务 '+done+'/'+linked.length+'</span><span class="tk-sp"></span>'+UB.left(r.dueDate,r.status==='done')+'<span class="tk-mut2">'+esc(String(r.dueDate||'').slice(5))+'</span></div>'
-        + (acc?'<div class="tk-r4"><span class="tk-tag" title="'+esc(acc)+'">验收 · '+esc(acc.slice(0,16))+(acc.length>16?'…':'')+'</span></div>':'')
-        + '</div>';
-    };
-    const over=list.filter(r=>r.status!=='done'&&r.dueDate&&TBoard.daysTo(r.dueDate)<0).length;
-    return UB.lane({icon:'🚩',title:'项目里程碑',color:'#8b5cf6',cls:'tb-c3',
-        sub:list.length+' 个 · 完成 '+list.filter(r=>r.status==='done').length+(over?' · '+over+' '+overWord():''),
-        hint:over?'⚠️ 有 '+over+' 个已过截止日':'',
-        tail:'按截止日期排',
-        cols:COLS,
-        count:function(k){return list.filter(r=>r.status===k).length;},
-        cell:function(k){return list.filter(r=>r.status===k).map(card).join('');}})
-      + '<div style="font-size:11px;color:var(--muted);line-height:1.75;margin-top:8px">卡片进度 = 关联任务里已完成的比例。点卡片或 ✏️ 改目标与验收标准；里程碑也会挂在任务卡的 r4 上。</div>';
-  },
   resourcePanel:function(p) {
     const lines=String(p.resources || '').split('\n').map(function(s){return s.trim();}).filter(Boolean);
     const notes=String(p.notes || '').split('\n').map(function(s){return s.trim();}).filter(Boolean);
@@ -2065,54 +1931,6 @@ const GameDev = {
       + '<button type="button" class="gd-res-fold" data-gd-resfold="'+esc(p.id)+'" aria-expanded="'+(!folded)+'" title="'+(folded?'展开':'收起')+'项目资源">'+(folded?'展开 ▸':'收起 ▾')+'</button>'
       + '</span></div>'
       + body + '</div>';
-  },
-  tasks:function(rows,all,milestones) {
-    const statuses=D.DEV_SCHEMA.devTasks.choices.status;
-    const COLDOT={backlog:'#f59e0b',doing:'#3b82f6',review:'#8b5cf6',done:'#10b981'};
-    const discCount=id=>(DISCUSS[id]||[]).length;
-    return '<div class="gd-board">'+statuses.map(function(status){
-      const items=rows.filter(r=>r.status===status).sort(function(a,b){
-        const ao=(a.order==null?9999:a.order),bo=(b.order==null?9999:b.order);
-        if(ao!==bo)return ao-bo;
-        return ['high','mid','low'].indexOf(a.priority)-['high','mid','low'].indexOf(b.priority);
-      });
-      return '<section class="gd-column" data-gd-col="'+esc(status)+'"><div class="gd-column-title"><h3><i class="gd-coldot" style="background:'+(COLDOT[status]||'#888')+'"></i>'+LABELS[status]+'</h3><span>'+items.length+'</span></div>'+items.map(function(r){
-        const dep=all.find(t=>t.id===r.dependsOn),milestone=milestones.find(m=>m.id===r.milestoneId);
-        const role=roleOf(ownerFirst(r.owner) || CONFIG.me);
-        const mins=r._ut?Math.max(1,Math.round((Date.now()-r._ut)/60000)):null;
-        const fresh=(r.updatedBy&&r.updatedBy!==CONFIG.me&&mins&&mins<180)?'<span class="gd-fresh">'+(mins<=1?'刚刚':mins+' 分钟前')+'更新</span>':'';
-        const prog=r.prog==null?null:Math.max(0,Math.min(100,Number(r.prog)));
-        const softs=String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean);
-        const meta='<div class="gd-task-meta">'+(r.stage?'<span class="gd-chip">'+esc(r.stage)+'</span>':'')+softs.map(function(s){return '<span class="gd-soft"><u>'+esc(SOFT_ABBR[s] || s.charAt(0))+'</u>'+esc(s)+'</span>';}).join('')+'</div>';
-        const progRow=prog==null?'':'<div class="gd-progrow"><div class="gd-progbar"><i style="width:'+prog+'%"></i></div><span class="gd-progpct">'+prog+'%</span></div>';
-        const pathRow=r.path?'<div class="gd-pathrow"><span class="gd-pathlab">UE</span><code class="gd-path" title="'+esc(r.path)+'">'+esc(r.path)+'</code></div>':'';
-        const extra=(milestone?'<div class="gd-task-extra">里程碑 · '+esc(milestone.title)+'</div>':'')+(dep?'<div class="gd-task-extra gd-dependency'+(dep.status!=='done'?' is-blocked':'')+'">前置 · '+esc(dep.title)+(dep.status==='done'?'（完成）':'（未完成）')+'</div>':'');
-        const nDisc=discCount(r.id);
-        // v2.4.1：编辑锁 —— 别人锁的且 15 分钟内 → 卡上胶囊 + 条纹底；自己锁的不显示
-        const lb=r.lockedBy;
-        const locked=lb&&lb.by&&lb.by!==CONFIG.me&&(now()-(lb.at||0))<15*60000;
-        const pill=locked?'<span class="gd-editing-pill"><i></i>'+esc(roleOf(lb.by).n)+' 正在编辑</span>':'';
-        const foot='<div class="gd-task-foot"><button type="button" class="gd-disc-chip" data-gd-disc="devTask" data-id="'+esc(r.id)+'" title="团队讨论">💬'+(nDisc?' '+nDisc:'')+'</button><button type="button" class="gd-hist" data-gd-history="'+esc(r.id)+'" title="历史操作记录（时间 · 内容 · 操作人）">🕘</button><button type="button" class="gd-card-edit" data-gd-edit="devTask" data-id="'+esc(r.id)+'" title="编辑任务">✏️ 编辑</button></div>';
-        // 交期按目标设计拆两段：日期+交 / 超期红字
-        let dueHtml='';
-        if(r.dueDate){const md=String(r.dueDate).slice(5);
-          const diff=Math.round((new Date(r.dueDate+'T00:00:00')-new Date(D.today()+'T00:00:00'))/86400000);
-          if(status==='done')dueHtml='<span class="gd-due">'+esc(md)+' 交</span>';
-          else if(diff<0)dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due is-overdue">超期 '+(-diff)+' 天</span>';
-          else if(diff===0)dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due is-overdue">0 天</span>';
-          else dueHtml='<span class="gd-due">'+esc(md)+' 交</span><span class="gd-due">剩 '+diff+' 天</span>';}
-        const pri={high:'P1',mid:'P2',low:'P3'}[r.priority] || '';
-        // v2.4.0：卡序对齐目标设计 = 标题+P1 → 阶段+软件 → 负责人·交期·更新 → 进度 → UE路径 → 💬·🕘·编辑
-        return '<article class="gd-task'+(locked?' is-locked':'')+'" draggable="'+(locked?'false':'true')+'" data-gd-task="'+esc(r.id)+'">'
-          + pill
-          + '<div class="gd-task-head"><h4>'+esc(r.title)+'</h4><span class="gd-badge gd-badge--'+esc(r.priority)+'">'+esc(pri)+'</span></div>'
-          + meta
-          + '<div class="gd-ownerline"><button type="button" class="gd-owner" data-gd-owner="'+esc(r.id)+'" title="点击更换负责人"><i class="gd-rdot" style="background:'+esc(role.c)+'"></i><b style="color:'+esc(role.c)+'">'+esc(role.n)+'</b></button>'+dueHtml+fresh+'</div>'
-          + progRow + pathRow + extra
-          + foot
-          + '</article>';
-      }).join('')+(!items.length?'<div class="gd-column-empty">暂无任务</div>':'')+'</section>';
-    }).join('')+'</div>';
   },
   bugs:function(rows) {
     if(!rows.length)return this.empty('让问题都有复现步骤和处理结果');
@@ -2163,79 +1981,8 @@ const GameDev = {
     }).join('')+'</div>'
       + '<div style="font-size:11px;color:var(--muted);line-height:1.75;margin-top:8px">按日期倒序，一篇卡三段：完成 / 阻碍 / 下次。<b>「下次」是写给自己的下一步</b>，别留空。</div>';
   },
-  times:function(rows,projectId) {
-    const active=D.devAll('devTime').filter(r=>r.startedAt&&!r.endedAt&&(!this._member||r.owner===this._member));
-    const projects=D.devAll('devProject');
-    const list=rows.filter(r=>!r.startedAt||r.endedAt);
-    const total=list.reduce((n,r)=>n+(r.minutes||0),0);
-    const byCat={},byMan={};
-    list.forEach(function(r){byCat[r.category]=(byCat[r.category]||0)+(r.minutes||0);const k=r.owner||CONFIG.me;byMan[k]=(byMan[k]||0)+(r.minutes||0);});
-    const timer='<div class="tb-timer">'
-      + (active.length?'':'<h3>开始一段专注开发</h3><p>选好工作类型，结束时记录实际耗时。计时跨页面、刷新后都还在。</p>')
-      + (active.length?active.map(function(r){
-          const p=projects.find(function(x){return x.id===r.projectId;});
-          return '<div class="gd-timer-active"><div><span class="gd-eyebrow">正在计时 · '+esc(roleOf(r.owner).n)+' · '+esc(p?p.name:'未找到项目')+' · '+esc(r.category)+'</span><strong data-gd-clock="'+r.startedAt+'">'+clock(Date.now()-r.startedAt)+'</strong><p>'+esc(r.note||'专注于当前工作')+'</p></div>'
-            + '<div class="gd-timer-buttons"><button class="btn btn-primary" data-gd-stop="'+esc(r.id)+'">停止并保存工时</button><button class="btn btn-sm" data-gd-delete="devTime" data-id="'+esc(r.id)+'">舍弃本次</button></div></div>';
-        }).join(''):'')
-      + '<div class="tb-tgo"><button class="btn btn-primary btn-sm" data-gd-start>＋ 开始计时</button><button class="btn btn-sm" data-gd-new="devTime">补录工时</button></div>'
-      + '<small>计时跨页面、刷新后仍保留；关闭页面期间也会继续累计，离开工作前请停止。跨日计时按天拆分。</small>'
-      + '</div>';
-    const panels='<div class="tb-timers">'
-      + '<div class="tb-panel"><h3>👥 成员工时<small>本筛选合计 '+hours(total)+'</small></h3>'
-      + Object.entries(ROLE).map(function(kv){
-          const m=byMan[kv[0]]||0;
-          return '<div class="tb-brow"><span>'+esc(kv[1].n)+'</span>'+TBoard.bar(total?m/total*100:0,kv[1].c)+'<strong>'+hours(m)+'</strong></div>';
-        }).join('')
-      + '</div>'
-      + '<div class="tb-panel"><h3>🏷 工作类型<small>'+Object.keys(byCat).length+' 类</small></h3>'
-      + (Object.keys(byCat).length?Object.keys(byCat).sort((a,b)=>byCat[b]-byCat[a]).map(function(k){
-          return '<div class="tb-brow"><span>'+esc(k)+'</span>'+TBoard.bar(total?byCat[k]/total*100:0)+'<strong>'+hours(byCat[k])+'</strong></div>';
-        }).join(''):'<p style="font-size:11px;color:var(--muted);margin:0">这段时间还没有已保存的工时</p>')
-      + '</div></div>';
-    const detail=list.length
-      ? '<div class="tk-lane"><div class="tk-lane-hd" style="border-left-color:var(--accent);cursor:default"><span>◷ 工时明细</span><span class="cnt">'+list.length+' 段 · 合计 '+hours(total)+'</span><span class="tri" style="margin-left:auto">按日期倒序</span></div>'
-        + '<div style="padding:8px 9px;display:flex;flex-direction:column;gap:6px">'
-        + list.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))||(b._ut||0)-(a._ut||0)).map(function(r){
-            return '<div class="tb-trow"><b>'+esc(String(r.date).slice(5))+'</b><span class="cat">'+esc(r.category)+'</span><span class="tx">'+esc(r.note||'未填写说明')+'</span>'
-              + '<span class="hr">'+hours(r.minutes)+'</span><span class="ops">'+UB.ico('devTime',r.id,(DISCUSS[r.id]||[]).length)+'</span></div>';
-          }).join('')
-        + '</div></div>'
-      : this.empty('还没有符合条件的已保存工时');
-    return timer+panels+detail;
-  },
-  assets:function(rows) {
-    if(!rows.length)return this.empty('把资产从设计跟踪到 UE 入库');
-    const COLS=[['pending','未开始'],['wip','制作中'],['ready','已就绪']];
-    const stageOf=function(r){const p=assetProgress(r);return p.percent===100?'ready':p.count===0?'pending':'wip';};
-    const card=function(r){
-      const pr=assetProgress(r);
-      const nD=(DISCUSS[r.id]||[]).length;
-      return '<div class="tk-card" data-gd-open="devAsset" data-id="'+esc(r.id)+'">'
-        + UB.head('P3',r.type,r.name,'devAsset',r.id,nD)
-        + '<div class="tb-pg">'+TBoard.bar(pr.percent,pr.percent===100?'#10b981':'var(--accent)')+'<span class="tb-pct">'+pr.count+'/'+pr.total+'</span></div>'
-        + '<div class="tb-stages">'+pr.stages.map(function(k){
-            return '<label title="'+esc(STAGES[k])+'"><input type="checkbox" data-gd-check="'+esc(r.id)+'" data-stage="'+k+'" '+(r.checks[k]?'checked':'')+' data-no-draft><span></span></label>';
-          }).join('')+'</div>'
-        + (function(){var nx=pr.stages.filter(function(k){return !(r.checks||{})[k];})[0];
-            return nx?'<div class="tk-r2"><span class="tb-k">下一步</span><span class="tk-sw" title="'+esc(STAGES[nx])+'">'+esc(STAGES[nx])+'</span></div>'
-                     :'<div class="tk-r2"><span class="tk-due done">全部阶段已完成</span></div>';})()
-        + '<div class="tk-r3">'+UB.who(r.owner)+'<span class="tk-sp"></span>'+UB.left(r.dueDate,pr.percent===100)+'</div>'
-        + (r.path?'<div class="tk-r4"><span class="tk-tag" title="'+esc(r.path)+'">'+esc(String(r.path).split('/').pop().slice(0,22))+'</span></div>':'')
-        + '</div>';
-    };
-    const list=rows.slice(), ready=list.filter(function(r){return stageOf(r)==='ready';}).length;
-    return UB.lane({icon:'▣',title:'资产流程',color:'#34d399',cls:'tb-c3',
-        sub:list.length+' 个 · 就绪 '+ready+' · 制作中 '+list.filter(function(r){return stageOf(r)==='wip';}).length,
-        tail:'点小方块 = 勾阶段',
-        cols:COLS,
-        count:function(k){return list.filter(function(r){return stageOf(r)===k;}).length;},
-        cell:function(k){return list.filter(function(r){return stageOf(r)===k;}).map(card).join('');}})
-      + '<div style="font-size:11px;color:var(--muted);line-height:1.75;margin-top:8px">每个资产按类型自带流程阶段（模型 7 步 / 场景 5 步 / 其他 3 步）—— <b>点小方块直接勾</b>，勾满自动进「已就绪」。</div>';
-  },
   bind:function(box) {
     const self=this;
-    if(this._clock)clearInterval(this._clock);
-    this._clock=setInterval(function(){if(!box.isConnected){clearInterval(self._clock);self._clock=null;return;}box.querySelectorAll('[data-gd-clock]').forEach(el=>{el.textContent=clock(Date.now()-Number(el.dataset.gdClock));});},1000);
     box.addEventListener('input',function(e){if(e.target.id==='gd-search'){self._query=e.target.value;self.repaint();}});
     box.addEventListener('keydown',function(e){
       const current=e.target.closest('[role=tab]');
@@ -2248,12 +1995,6 @@ const GameDev = {
       if(e.target.id==='gd-project'){self._project=e.target.value;self.resetFilters();self.repaint();}
       if(e.target.id==='gd-member'){self._member=e.target.value;self.repaint();}
       if(e.target.id==='gd-filter'){self._filter=e.target.value;self.repaint();}
-      if(e.target.matches('[data-gd-check]')){
-        const r=D.devAll('devAsset').find(r=>r.id===e.target.dataset.gdCheck);
-        if(!r)return;
-        try{D.devSave('devAsset',{checks:Object.assign({},r.checks,{[e.target.dataset.stage]:e.target.checked})},r.id);self.repaint();}
-        catch(err){e.target.checked=!e.target.checked;App.toast(err.message,7000);}
-      }
     });
     let dragTask=null;
     box.addEventListener('dragstart',function(e){const t=e.target.closest('[data-gd-task]');if(!t)return;dragTask=t.dataset.gdTask;t.classList.add('gd-dragging');try{e.dataTransfer.effectAllowed='move';}catch(x){}});
@@ -2326,15 +2067,13 @@ const GameDev = {
         if(r)try{D.devSave(kind,{status:statuses[statuses.indexOf(r.status)+1]},r.id);self.repaint();App.toast('状态已更新');}catch(err){App.toast(err.message,7000);}return;}
       const openc=e.target.closest('[data-gd-open]');
       if(openc){self.openEditor(openc.dataset.gdOpen,openc.dataset.id);return;}
-      if(e.target.closest('[data-gd-start]')){self.startEditor();return;}
-      const stop=e.target.closest('[data-gd-stop]');
-      if(stop){try{D.devStopTime(stop.dataset.gdStop);self.repaint();App.toast('工时已保存');}catch(err){App.toast(err.message,7000);}return;}
       const img=e.target.closest('[data-gd-image]');
       if(img){const r=D.devAll('devBug').find(r=>r.id===img.dataset.gdImage);if(r&&r.images[+img.dataset.index])App.openModal({title:r.title,width:900,html:thumb(r.images[+img.dataset.index],'BUG 截图').replace('<img ','<img class="gd-image-full" ')});}
     });
     TBoard.bind(box, this, App);
   },
   chooseTab:function(key) {
+    if(!TABS.some(t=>t[0]===key))key='devTask';
     this._tab=key;this.resetFilters();TBoard.kw='';
     this.repaint().then(()=>{const tab=this._box.querySelector('[role=tab][data-gd-tab="'+key+'"]');if(tab)tab.focus({preventScroll:true});});
   },
@@ -2350,29 +2089,22 @@ const GameDev = {
   remove:function(kind,id) {
     const self=this,r=D.devAll(kind).find(r=>r.id===id);
     if(!r){App.toast('记录已被删除');return;}
-    const discard=kind==='devTime'&&r.startedAt&&!r.endedAt;
-    const sub=discard?'本次计时将停止，不计入工时统计。':(kind==='devMilestone'||kind==='devTask'?'删除后会解除相关任务的关联。':'删除后可以在团队回收站恢复。');
-    askConfirm({title:discard?'舍弃本次计时？':'删除这条记录？',msg:sub+' 删除会同步到团队，记录可以在回收站恢复。',ok:'确认删除',danger:true,then:yes=>{if(!yes)return;try{D.devRemove(kind,id);self.repaint();App.toast('已移入回收站');}catch(err){App.toast(err.message);}}});
-  },
-  startEditor:function() {
-    const self=this,p=this.project();if(!p)return;
-    App.openModal({title:'开始开发计时',sub:esc(p.name),width:480,html:'<form id="gd-timer-form" class="gd-form">'+select('category','工作类型',D.DEV_SCHEMA.devTimes.choices.category,'程序')+area('note','这段时间做什么','','例如：优化程序化岩石 HDA')+'<button class="btn btn-primary gd-full" type="submit">开始计时</button></form>',mount:function(body){body.querySelector('form').onsubmit=function(e){e.preventDefault();try{D.devStartTime(p.id,body.querySelector('[name=category]').value,body.querySelector('[name=note]').value.trim());App.closeModal();self.repaint();}catch(err){App.toast(err.message,7000);}};}});
+    if(kind==='devTask')DEV.devTasks.forEach(t=>{if(t.dependsOn===id){const prev=clone(t);t.dependsOn='';stamp(t,prev);}});
+    askConfirm({title:'删除这条记录？',msg:'删除会同步到团队，记录可以在回收站恢复。',ok:'确认删除',danger:true,then:yes=>{if(!yes)return;try{D.devRemove(kind,id);self.repaint();App.toast('已移入回收站');}catch(err){App.toast(err.message);}}});
   },
   openEditor:function(kind,id) {
     const self=this,p=this.project(),r=id?D.devAll(kind).find(r=>r.id===id):{};
     if(!r){App.toast('记录已被删除');return;}
     if(kind!=='devProject'&&!p){App.toast('请先创建项目');return;}
-    if(kind==='devTime'&&r.startedAt&&!r.endedAt){App.toast('请先停止计时，再编辑工时');return;}
     // v2.4.1：别人 15 分钟内锁着这张卡 → 不开编辑器，只提示
     if(kind==='devTask'&&id&&r.lockedBy&&r.lockedBy.by&&r.lockedBy.by!==CONFIG.me&&(now()-(r.lockedBy.at||0))<15*60000){App.toast('🔴 '+roleOf(r.lockedBy.by).n+' 正在编辑这张卡，稍后再来');return;}
     const schema=D.DEV_SCHEMA[D.KEYS[kind]];
     let html='';
     let customTask=false; // v2.4.0：devTask 用目标图四的双列大弹窗（自带底栏）
     if(kind==='devProject')html=field('name','项目名称',r.name,'text','required maxlength="200"')+field('engine','开发工具 / 版本',r.engine || 'UE / Houdini','text','maxlength="200"')+select('status','项目状态',schema.choices.status,r.status || 'active')+field('targetDate','目标交付日期',r.targetDate,'date')+area('description','项目简介 / 范围',r.description,'描述核心玩法、目标平台和当前版本范围')+field('rootPath','工程总路径',r.rootPath,'text','maxlength="300" placeholder="/Game/HuoDong/"')+area('resources','资源链接（一行一条）',r.resources,'格式：图标 名称 | 地址 | 备注　例：📊 排期表 | https://… | 日韩素材排期总表')+area('notes','注意事项（一行一条）',r.notes,'长期有效的规矩　例：Houdini 导出前先 Apply Transform、单位统一 cm')+area('notice','公告',r.notice,'会过期的短期提醒　例：本周目标——档案柜三档先跑通普通档');
-    if(kind==='devMilestone')html=field('title','里程碑名称',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'planned')+field('dueDate','截止日期',r.dueDate,'date')+area('description','目标',r.description,'例如：完成可试玩的 10 分钟核心循环')+area('acceptance','交付 / 验收标准',r.acceptance,'明确做到什么程度算完成');
     if(kind==='devTask'){
       customTask=true;
-      const milestones=D.devAll('devMilestone',p.id),tasks=D.devAll('devTask',p.id).filter(t=>t.id!==id);
+      const tasks=D.devAll('devTask',p.id).filter(t=>t.id!==id);
       const dlist=id?(DISCUSS[id]||[]):[];
       const discBlock='<div class="gd-field gd-full gd-discfield"><span>💬 讨论（'+dlist.length+'）· 讨论留在卡上</span>'
         +(dlist.length?'<div class="gd-disc-list">'+dlist.map(function(m){return '<p>'+whoName(m.u)+' · '+esc(dstr(m.t))+' '+fmtT(m.t)+'</p><p class="gd-disc-x">'+esc(m.x)+'</p>';}).join('')+'</div>':'<p class="gd-note">还没有讨论 · 第一个说什么</p>')
@@ -2395,26 +2127,21 @@ const GameDev = {
         + chipGroup('soft','主要软件',SOFTS.map(function(s){return [s,s];}),String(r.soft || '').split(/[,，;；\s]+/).filter(Boolean),true)
         + field('path','UE 资源路径',r.path,'text','maxlength="2000" placeholder="/Game/HuoDong/…"')
         + select('dependsOn','前置任务',tasks.map(function(t){return [t.id,t.title];}),r.dependsOn,'无前置任务')
-        + select('milestoneId','所属里程碑',milestones.map(function(m){return [m.id,m.title];}),r.milestoneId,'不关联')
         + discBlock
         + '</div></div>';
     }
     if(kind==='devBug')html=field('title','BUG 标题',r.title,'text','required maxlength="200"')+select('status','状态',schema.choices.status,r.status || 'open')+select('severity','严重程度',schema.choices.severity,r.severity || 'medium')+field('environment','环境 / 软件版本',r.environment,'text','maxlength="1000"')+area('steps','复现步骤',r.steps,'1. 打开关卡\n2. 执行操作\n3. 观察结果')+area('expected','预期结果',r.expected)+area('actual','实际结果',r.actual)+area('solution','修复 / 验证记录',r.solution)+'<div class="gd-field gd-full"><span>问题截图（最多 2 张，每张不超过 1 MB）</span><input id="gd-bug-files" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple><div id="gd-bug-previews" class="gd-screenshots"></div><p class="gd-note">截图上传到同一团队私有仓。移除引用保留原文件；本地模拟模式刷新后截图重置。</p></div>';
     if(kind==='devLog')html=field('date','记录日期',r.date || D.today(),'date','required')+area('done','完成 / 进展',r.done,'今天实现了什么？尝试了哪些方案？')+area('blockers','遇到的阻碍',r.blockers,'当前卡在哪里？还需要验证什么？')+area('next','下次继续',r.next,'留下下一次打开项目时的第一步');
-    if(kind==='devTime')html=field('date','工作日期',r.date || D.today(),'date','required')+select('category','工作类型',schema.choices.category,r.category || '程序')+field('minutes','耗时（分钟）',r.minutes==null?30:Math.max(.1,Math.round(r.minutes*10)/10),'number','required min="0.1" max="1440" step="0.1"')+area('note','工作说明',r.note)+(r.startedAt?'<p class="gd-note gd-full">编辑后的记录作为手动工时保存，时长精确到 0.1 分钟。</p>':'');
-    if(kind==='devAsset')html=field('name','资产名称',r.name,'text','required maxlength="200"')+select('type','资产类型',schema.choices.type,r.type || '模型')+field('dueDate','截止日期',r.dueDate,'date')+field('path','文件 / UE 资源路径',r.path,'text','maxlength="2000"')+area('note','规格 / 备注',r.note,'例如：三角面预算、贴图规格、HDA 输出要求')+'<div class="gd-field gd-full"><span>制作检查清单</span><div id="gd-asset-stages" class="gd-checks"></div><p class="gd-note">检查项目随资产类型调整，保存后也可以在卡片上直接勾选。</p></div>';
-    if(!customTask)html=(kind==='devTime'
-      ? select('owner','工时成员',Object.entries(ROLE).map(([id,r])=>[id,r.n]),ownerFirst(r.owner)||CONFIG.me)
-      : chipGroup('owner','负责人（可多选）',Object.entries(ROLE).map(([id,r])=>[id,r.n]),ownerIds(r.owner||CONFIG.me),true))+html;
+    if(!customTask)html=chipGroup('owner','负责人（可多选）',Object.entries(ROLE).map(([id,r])=>[id,r.n]),ownerIds(r.owner||CONFIG.me),true)+html;
     const taskFoot=customTask?'<div class="gd-form-actions gd-full gd-ed-foot"><span class="gd-ed-foot-l"><button type="submit" class="btn btn-primary" id="gd-editor-save">📌 更改保存</button><button type="button" class="btn" id="gd-editor-draft" title="草稿自动存本机">📄 有草稿</button></span>'+(id?'<button type="button" class="btn btn-danger" id="gd-editor-del">🗑 删除</button>':'')+'</div>':'';
     html='<form id="gd-editor" class="gd-form'+(customTask?' gd-form-task':'')+'">'+html+(customTask?taskFoot:'<div class="gd-form-actions gd-full"><button type="button" class="btn" id="gd-editor-cancel">取消</button><button type="submit" class="btn btn-primary" id="gd-editor-save">'+(id?'保存修改':'创建记录')+'</button></div>')+'</form>';
     // v2.4.1：编辑锁 —— 打开即锁 + 4 分钟续期；任何关闭路径（X/保存/删除/Esc）都解锁
     let lockTimer=null;
     const releaseLock=()=>{if(lockTimer){clearInterval(lockTimer);lockTimer=null;}if(kind==='devTask'&&id){try{devLock(id,false);}catch(e){}}return true;}; // 必须返回 true：beforeClose 约定 false=否决，undefined 会被 !v 误判成否决
-    const modalOpt={title:kind==='devProject'?(id?'编辑项目':'新建开发项目'):(customTask?(id?r.title:NEW_LABELS[kind]):(id?EDIT_LABELS[kind]:NEW_LABELS[kind])),sub:kind==='devProject'?'项目是六类开发记录的归属。':esc(p.name),width:customTask?980:940,html:html,beforeClose:releaseLock,mount:function(body){
-      const form=body.querySelector('form'),draftKey=kind+'|'+(id||p?.id||'new');let images=(r.images || []).slice(),loading=false,checks=Object.assign({},r.checks || {});
-      const restored=localDrafts[draftKey];if(restored?.__images)images=restored.__images;if(restored?.__checks)checks=restored.__checks;if(restored){form.querySelectorAll('[name]').forEach(el=>{if(restored[el.name]!==undefined)el.value=restored[el.name];});}
-      function persistDraft(){const d={__images:images,__checks:checks};form.querySelectorAll('[name]').forEach(el=>{if(!el.name.startsWith('check-'))d[el.name]=el.value;});try{localDrafts[draftKey]=d;saveDrafts();}catch(err){App.toast('本机草稿保存失败，请保留表单');}}body.oninput=persistDraft;
+    const modalOpt={title:kind==='devProject'?(id?'编辑项目':'新建开发项目'):(customTask?(id?r.title:NEW_LABELS[kind]):(id?EDIT_LABELS[kind]:NEW_LABELS[kind])),sub:kind==='devProject'?'项目是四类开发记录的归属。':esc(p.name),width:customTask?980:940,html:html,beforeClose:releaseLock,mount:function(body){
+      const form=body.querySelector('form'),draftKey=kind+'|'+(id||p?.id||'new');let images=(r.images || []).slice(),loading=false;
+      const restored=localDrafts[draftKey];if(restored?.__images)images=restored.__images;if(restored){form.querySelectorAll('[name]').forEach(el=>{if(restored[el.name]!==undefined)el.value=restored[el.name];});}
+      function persistDraft(){const d={__images:images};form.querySelectorAll('[name]').forEach(el=>{d[el.name]=el.value;});try{localDrafts[draftKey]=d;saveDrafts();}catch(err){App.toast('本机草稿保存失败，请保留表单');}}body.oninput=persistDraft;
       if(customTask){
         // v2.4.1：上锁 + 4 分钟续期（别人看卡 15 分钟内显示「正在编辑」胶囊）
         if(id){try{devLock(id,true);lockTimer=setInterval(function(){try{devLock(id,true);}catch(e){}},4*60000);}catch(e){}}
@@ -2472,20 +2199,13 @@ const GameDev = {
           catch(err){App.toast(err.message,7000);}finally{loading=false;const saveButton=body.querySelector('#gd-editor-save');if(saveButton)saveButton.disabled=false;fileInput.value='';}
         };
       }
-      if(kind==='devAsset'){
-        const node=body.querySelector('#gd-asset-stages'),type=body.querySelector('[name=type]');
-        function stages(){node.innerHTML=(WORKFLOWS[type.value] || WORKFLOWS['其他']).map(k=>'<label><input type="checkbox" name="check-'+k+'" '+(checks[k]?'checked':'')+'><span>'+STAGES[k]+'</span></label>').join('');}
-        node.onchange=function(e){checks[e.target.name.slice(6)]=e.target.checked;persistDraft();};type.onchange=stages;stages();
-      }
       form.onsubmit=function(e){
         e.preventDefault();if(loading)return;
         const payload={};form.querySelectorAll('[name]').forEach(el=>{if(el.name.indexOf('check-')!==0)payload[el.name]=el.value.trim();});
         if(kind!=='devProject')payload.projectId=r.projectId || p.id;
         if(kind==='devTask')payload.prog=(payload.prog===''||payload.prog==null)?0:Math.max(0,Math.min(100,Number(payload.prog)));
         if(kind==='devLog'&&!payload.done&&!payload.blockers&&!payload.next){App.toast('至少填写一项进展、阻碍或下一步');return;}
-        if(kind==='devTime'){payload.minutes=Number(payload.minutes);payload.startedAt=0;payload.endedAt=0;payload.sessionId='';payload.sessionStartedAt=0;payload.sessionEndedAt=0;}
         if(kind==='devBug')payload.images=images;
-        if(kind==='devAsset')payload.checks=checks;
         try{if(id){Object.keys(payload).forEach(k=>{if(equal(payload[k],r[k])||(typeof payload[k]==='string'&&!payload[k]&&!r[k]))delete payload[k];});const current=D.devAll(kind).find(x=>x.id===id);if(current)Object.entries(payload).forEach(([field,mine])=>{if(!equal(current[field],r[field])&&!equal(current[field],mine)){const key=D.KEYS[kind]+'|'+id+'|'+field;if(!CONFLICTS.some(c=>c.key===key))CONFLICTS.push({key,kind:D.KEYS[kind],id,field,mine,theirs:current[field],by:current.updatedBy,title:current.title||current.name||id});}});}
         const saved=D.devSave(kind,payload,id);EDIT_DIRTY=false;delete localDrafts[draftKey];try{saveDrafts();}catch(e){toast('记录已保存，草稿清理失败','warn');}releaseLock();modalOptions=null;if(kind==='devProject'){self._project=saved.id;self.resetFilters();}App.closeModal();self.repaint();App.toast(id?'修改已保存':'记录已创建');}
         catch(err){App.toast(err.message,8000);}
@@ -2546,7 +2266,9 @@ const GameDev = {
      存储 & 云同步（collectLocal → computeMerge → doSyncChannel）
      ============================================================ */
   function collectLocal() {
-    return { ...EXTRA, DATA:DATA.map(r=>({...r,draft:null})), TRASH:TRASH.map(r=>({...r,draft:null})), LOG, DISCUSS, COLUMNS, ...DEV, DELETED, _schema:2, _ts:now(), _by:CONFIG.me, _v:VERSION };
+    const activeTrash=TRASH.filter(r=>!RETIRED_DEV_KEYS.includes(r.kind)).map(r=>({...r,draft:null}));
+    const activeDeleted=Object.fromEntries(Object.entries(DELETED).filter(([k])=>!RETIRED_DEV_KEYS.some(x=>k.startsWith(x+'|'))));
+    return { ...EXTRA, DATA:DATA.map(r=>({...r,draft:null})), TRASH:activeTrash, LOG, DISCUSS, COLUMNS, ...DEV, DELETED:activeDeleted, _schema:2, _ts:now(), _by:CONFIG.me, _v:VERSION };
   }
   function saveLocal(s) {
     const state=s||collectLocal();
@@ -2557,13 +2279,14 @@ const GameDev = {
   }
   function applyState(s) {
     if (!s) return;
-    EXTRA=Object.fromEntries(Object.entries(s).filter(([k])=>!['DATA','TRASH','LOG','DISCUSS','COLUMNS','DELETED','_localConflicts',...Object.values(DEV_KEYS),'_ts','_by','_v','_schema'].includes(k)));
+    EXTRA=Object.fromEntries(Object.entries(s).filter(([k])=>!['DATA','TRASH','LOG','DISCUSS','COLUMNS','DELETED','_localConflicts',...Object.values(DEV_KEYS),...RETIRED_DEV_KEYS,'_ts','_by','_v','_schema'].includes(k)));
     Object.values(DEV_KEYS).forEach(k=>{DEV[k]=Array.isArray(s[k])?clone(s[k]):[];});
-    DELETED=clone(s.DELETED||{});
+    DEV.devTasks.forEach(t=>{if(Object.hasOwn(t,'milestoneId')){delete t.milestoneId;if(t._fields)delete t._fields.milestoneId;}});
+    DELETED=Object.fromEntries(Object.entries(s.DELETED||{}).filter(([k])=>!RETIRED_DEV_KEYS.some(x=>k.startsWith(x+'|'))));
     monotonic=sharedKeys.reduce((max,k)=>(s[k]||[]).reduce((n,r)=>Math.max(n,r.updatedAt||0,...Object.values(r._fields||{}).map(f=>f.t||0)),max),monotonic);
     monotonic=Object.values(DELETED).reduce((n,t)=>Math.max(n,t.at||0),monotonic);
     if (s.DATA) DATA = clone(s.DATA);
-    if (s.TRASH) TRASH = s.TRASH;
+    if (s.TRASH) TRASH = s.TRASH.filter(r=>!RETIRED_DEV_KEYS.includes(r.kind));
     if (s.LOG) LOG = s.LOG;
     if (s.DISCUSS) DISCUSS = s.DISCUSS;
     if (s.COLUMNS && s.COLUMNS.length >= 2) COLUMNS = s.COLUMNS;
@@ -2618,7 +2341,7 @@ const GameDev = {
       const invalid=Object.values(DEV_KEYS).some(k=>{
         if(!data[k])return false;
         if(!Array.isArray(data[k]))return true;
-        return data[k].some(r=>!r||typeof r.id!=='string'||(['devLogs','devTimes'].includes(k)&&typeof r.date!=='string')||(k==='devAssets'&&(!r.checks||typeof r.checks!=='object')));
+        return data[k].some(r=>!r||typeof r.id!=='string'||(k==='devLogs'&&typeof r.date!=='string'));
       });
       if((data._schema||1)>2||!Array.isArray(data.DATA)||invalid)throw Error('云端结构无效，已停止写入');
     }
@@ -2689,7 +2412,7 @@ const GameDev = {
     pushTimer = setTimeout(() => doSyncChannel('github'), 800);
   }
   /* 每次本地变更都调它：落盘 + 节流上云 */
-  function save() {const s=stampAll(normalizeSessions(collectLocal()));applyState(s);saveLocal(s);if(!CONFLICTS.length)scheduleSync();}
+  function save() {const s=stampAll(collectLocal());applyState(s);saveLocal(s);if(!CONFLICTS.length)scheduleSync();}
 
   async function pull(silent) {
     const ch=CONFIG.channel;
@@ -3532,8 +3255,8 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tb-disc-n{font-size:10.5px;color:var(--muted);margin-bottom:2px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
   .tb-owner-multi{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 
-  /* ===== v3-18 · 统一看板层（tb-*）：里程碑 / BUG / 日志 / 工时 / 资产 =====
-     目标：这 5 个面板和「任务看板」长同一张脸 —— 同 KPI 条、同泳道列、
+  /* ===== v3-18 · 统一看板层（tb-*）：任务 / BUG / 日志 =====
+     目标：这 3 个面板和「任务看板」长同一张脸 —— 同 KPI 条、同泳道列、
      同紧凑卡（P 级 pill + 标题 + 信息行 + hover 图标动作）、同剩余天数说法。
      全部走既有主题令牌，6 套主题自动跟随。 */
   .tb-c4.tk-lane-bd{grid-template-columns:repeat(4,minmax(0,1fr))}
@@ -3551,14 +3274,6 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tb-adv{font-size:9.5px;border:1px solid var(--card-border);border-radius:5px;padding:0 6px;background:var(--card-bg);color:var(--muted);cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.7}
   .tb-adv:hover{border-color:var(--accent);color:var(--accent)}
   .tk-own-ro{cursor:default}
-  /* 资产阶段点（保留 input[data-gd-check] 原交互，只换外观） */
-  .tb-stages{display:flex;gap:3px;flex-wrap:wrap;margin-top:6px}
-  .tb-stages label{position:relative;cursor:pointer;display:inline-flex}
-  .tb-stages input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;width:100%;height:100%}
-  .tb-stages span{width:15px;height:15px;border-radius:4px;border:1px solid var(--card-border);background:var(--card-bg);display:block;position:relative}
-  .tb-stages input:checked+span{background:color-mix(in srgb,var(--accent) 82%,#fff);border-color:var(--accent)}
-  .tb-stages input:checked+span:after{content:'';position:absolute;left:4px;top:1px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}
-  .tb-stages label:hover span{border-color:var(--accent)}
   /* 开发日志时间线 */
   .tb-loglist{display:flex;flex-direction:column;gap:8px}
   .tb-logrow{display:grid;grid-template-columns:62px minmax(0,1fr);gap:9px;align-items:start}
@@ -3567,27 +3282,6 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
   .tb-logdate i{font-style:normal;font-size:9.5px;color:var(--muted);opacity:.75}
   .tb-logdate span{font-size:9.5px;color:var(--muted);opacity:.9}
   .tk-card.tb-logcard{padding:9px 11px}
-  /* 工时 */
-  .tb-timer{border:1px solid var(--card-border);border-radius:12px;background:var(--card-bg);padding:14px 15px;margin-bottom:10px}
-  .tb-timer h3{margin:0 0 4px;font-size:13.5px}
-  .tb-timer p{margin:0;font-size:11.5px;color:var(--muted);line-height:1.7}
-  .tb-timer small{display:block;font-size:10.5px;line-height:1.85;color:var(--muted);margin-top:12px;opacity:.9}
-  .tb-timer .tb-tgo{margin-top:11px;display:flex;gap:7px;flex-wrap:wrap;align-items:center}
-  .tb-timers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:10px}
-  .tb-panel{border:1px solid var(--card-border);border-radius:12px;background:var(--card-bg);padding:11px 13px}
-  .tb-panel h3{margin:0 0 9px;font-size:12px;display:flex;align-items:center;gap:6px}
-  .tb-panel h3 small{font-weight:500;color:var(--muted);font-size:10.5px;margin-left:auto}
-  .tb-brow{display:flex;align-items:center;gap:8px;font-size:11px;padding:2px 0}
-  .tb-brow span{flex:0 0 66px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .tb-brow strong{flex:0 0 52px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
-  .tb-trow{display:grid;grid-template-columns:62px 66px minmax(0,1fr) auto auto;gap:9px;align-items:center;border:1px solid var(--card-border);border-radius:10px;background:var(--card-bg-2);padding:7px 10px;font-size:11.5px}
-  .tb-trow>b{font-weight:700;font-variant-numeric:tabular-nums}
-  .tb-trow .cat{font-size:10px;color:var(--muted);border:1px solid var(--card-border);border-radius:5px;padding:0 5px;white-space:nowrap;justify-self:start}
-  .tb-trow .tx{color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .tb-trow .hr{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
-  .tb-trow .ops{display:flex;gap:1px;opacity:.5}
-  .tb-trow:hover .ops{opacity:1}
-  .tb-empty2{border:1px dashed var(--card-border);border-radius:11px;padding:18px;text-align:center;color:var(--muted);font-size:12px}
   /* 手机上没有 hover → 图标动作常显一半，否则根本点不到 */
   @media(hover:none){.tk-card .tk-ico{opacity:.72}}
   @media(max-width:900px){
@@ -4454,7 +4148,7 @@ a.gd-res-open:hover,button.gd-res-open:hover { border-color:var(--accent);text-d
       if (local) applyState(local);
       // 空数据库保持空，不将示例卡写入真实团队仓。
       SAVED=clone(collectLocal());
-      try {localDrafts=JSON.parse(localStorage.getItem(SYNC_PREFIX+'drafts')||'{}');CONFLICTS=local?local._localConflicts||[]:[];const b=JSON.parse(localStorage.getItem(SYNC_PREFIX+'base')||'null');if(b&&b.repo===CONFIG.channel.repo&&b.file===CONFIG.channel.file&&b.branch===CONFIG.channel.branch)BASE=b.state;const p=JSON.parse(localStorage.getItem(SYNC_PREFIX+'prefs')||'{}');GameDev._project=p.project||'';GameDev._tab=DEV_KEYS[p.tab]?p.tab:'devMilestone';GameDev._member=p.member||'';}catch(e){}
+      try {localDrafts=JSON.parse(localStorage.getItem(SYNC_PREFIX+'drafts')||'{}');CONFLICTS=local?local._localConflicts||[]:[];const b=JSON.parse(localStorage.getItem(SYNC_PREFIX+'base')||'null');if(b&&b.repo===CONFIG.channel.repo&&b.file===CONFIG.channel.file&&b.branch===CONFIG.channel.branch)BASE=b.state;const p=JSON.parse(localStorage.getItem(SYNC_PREFIX+'prefs')||'{}');GameDev._project=p.project||'';GameDev._tab=DEV_KEYS[p.tab]?p.tab:'devTask';GameDev._member=p.member||'';}catch(e){}
       if (!mounted) { mounted = true; document.addEventListener('keydown', onKeydown); }
       buildChrome();
       themeObserver?.disconnect();if(global.MutationObserver){themeObserver=new MutationObserver(()=>{const tr=root?.querySelector('.t-root');if(tr)tr.dataset.th=curTheme();});themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['class','data-theme']});if(hostEl.parentElement)themeObserver.observe(hostEl.parentElement,{attributes:true,attributeFilter:['class','data-theme']});}
