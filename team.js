@@ -1,5 +1,5 @@
 /* ============================================================
-   team.js —— UE 团队看板「植入工具」  v2.15.0-20261021
+   team.js —— UE 团队看板「植入工具」  v2.15.1-20261022
    ------------------------------------------------------------
    设计目标（用户口径）：
      「同事有自己的 html 个人工作站，也是 git 同步的，跟 NIKO 一个原理，
@@ -29,7 +29,7 @@
 (function (global) {
   'use strict';
 
-  const VERSION = 'v2.15.0-20261021'; // 移除空的里程碑、工时统计、资产流程模块，保留任务/BUG/日志
+  const VERSION = 'v2.15.1-20261022'; // 修复移除工时模块后同步合并仍调用旧函数的问题
 
   /* ---------- 配置（宿主页可覆盖） ---------- */
   const DEFAULT_CONFIG = {
@@ -258,7 +258,7 @@
     merged.DISCUSS=mergeDiscuss(local.DISCUSS,remote.DISCUSS);
     merged.COLUMNS=(remote.COLUMNS?.length>=2)?remote.COLUMNS:local.COLUMNS;
     CONFLICTS=CONFLICTS.filter(c=>(merged[c.kind]||[]).some(r=>r.id===c.id));
-    return normalizeSessions(merged);
+    return merged;
   }
   function cacheBase(remote) {
     BASE=clone(remote||{});
@@ -2089,7 +2089,6 @@ const GameDev = {
   remove:function(kind,id) {
     const self=this,r=D.devAll(kind).find(r=>r.id===id);
     if(!r){App.toast('记录已被删除');return;}
-    if(kind==='devTask')DEV.devTasks.forEach(t=>{if(t.dependsOn===id){const prev=clone(t);t.dependsOn='';stamp(t,prev);}});
     askConfirm({title:'删除这条记录？',msg:'删除会同步到团队，记录可以在回收站恢复。',ok:'确认删除',danger:true,then:yes=>{if(!yes)return;try{D.devRemove(kind,id);self.repaint();App.toast('已移入回收站');}catch(err){App.toast(err.message);}}});
   },
   openEditor:function(kind,id) {
